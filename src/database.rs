@@ -6,14 +6,16 @@ pub fn establish_connection() -> Result<SqliteConnection> {
     SqliteConnection::establish(&settings().database_url).map_err(|e| e.into())
 }
 
-#[derive(Queryable, Selectable, Insertable, Identifiable, Debug, PartialEq)]
+#[derive(Queryable, Selectable, Insertable, Identifiable, Debug, PartialEq, Clone)]
 #[diesel(table_name = crate::schema::units)]
 pub struct Unit {
     pub id: i32,
     pub name: String,
 }
 
-#[derive(Queryable, Selectable, Insertable, Identifiable, Associations, Debug, PartialEq)]
+#[derive(
+    Queryable, Selectable, Insertable, Identifiable, Associations, Debug, PartialEq, Clone,
+)]
 #[diesel(primary_key(code))]
 #[diesel(belongs_to(Unit))]
 #[diesel(table_name = crate::schema::courses)]

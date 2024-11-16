@@ -1,9 +1,13 @@
+mod common;
 mod cookies;
 mod courses;
 mod database;
+mod evaluations;
 mod schema;
 
 use crate::courses::get_all_courses;
+use crate::database::establish_connection;
+use crate::evaluations::get_all_sids;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use config::Config;
@@ -11,12 +15,21 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use std::time::Duration;
 use tokio::sync::OnceCell;
-use crate::database::establish_connection;
 
 static SETTINGS: OnceCell<Settings> = OnceCell::const_new();
 
 pub(crate) fn settings() -> &'static Settings {
     SETTINGS.get().unwrap()
+}
+
+#[derive(Deserialize, Debug)]
+struct Settings {
+    base_url: String,
+    proxy_url: String,
+    proxy_username: String,
+    proxy_password: String,
+    cookies_token: String,
+    database_url: String,
 }
 
 #[derive(Parser)]
@@ -51,13 +64,6 @@ enum EvalCommands {
     Fetch,
 }
 
-#[derive(Deserialize, Debug)]
-struct Settings {
-    base_url: String,
-    cookies_token: String,
-    database_url: String,
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     {
@@ -66,7 +72,7 @@ async fn main() -> Result<()> {
             .build()?;
         SETTINGS.set(settings.try_deserialize::<Settings>()?)?;
     }
-    
+
     let mut conn = establish_connection()?;
 
     let cli = Cli::parse();
@@ -92,7 +98,9 @@ async fn main() -> Result<()> {
         } => {}
         Commands::Evals {
             command: EvalCommands::Fetch,
-        } => {}
+        } => {
+            get_all_sids(&mut conn).await?;
+        }
         Commands::Evals {
             command: EvalCommands::Stats,
         } => {}

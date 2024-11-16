@@ -1,12 +1,10 @@
-use crate::cookies::get_cookies;
+use crate::common;
 use crate::database::{Course, Unit};
 use crate::schema::{courses, units};
 use crate::settings;
 use anyhow::Result;
 use diesel::{RunQueryDsl, SqliteConnection};
 use futures::{stream, StreamExt};
-use indicatif::ProgressBar;
-use reqwest::header::HeaderValue;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -24,22 +22,12 @@ struct ResponseList {
 }
 
 pub async fn get_all_courses(conn: &mut SqliteConnection) -> Result<()> {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        "User-Agent",
-        HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.3"),
-    );
-    headers.insert("Cookie", HeaderValue::from_str(&get_cookies().await)?);
-
-    let client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()?;
+    let client = common::client()?;
 
     let units = get_units(&client).await?;
     println!("Found {:?} units", units.len());
 
-    let pb = ProgressBar::new(units.len() as u64);
-
+    let pb = common::progress_bar(units.len() as u64);
     let courses = stream::iter(&units)
         .map(|unit| {
             let client = &client;
