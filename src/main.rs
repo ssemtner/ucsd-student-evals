@@ -1,3 +1,4 @@
+use diesel::ExpressionMethods;
 mod common;
 mod cookies;
 mod courses;
@@ -6,11 +7,11 @@ mod evaluations;
 mod schema;
 
 use crate::courses::get_all_courses;
-use crate::database::establish_connection;
-use crate::evaluations::get_all_sids;
+use crate::database::{establish_connection, Course};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use config::Config;
+use diesel::{QueryDsl, RunQueryDsl};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use std::time::Duration;
@@ -24,7 +25,6 @@ pub(crate) fn settings() -> &'static Settings {
 
 #[derive(Deserialize, Debug)]
 struct Settings {
-    base_url: String,
     proxy_url: String,
     proxy_username: String,
     proxy_password: String,
@@ -95,15 +95,27 @@ async fn main() -> Result<()> {
         }
         Commands::Courses {
             command: CourseCommands::Stats,
-        } => {}
+        } => {
+            courses::display_stats(&mut conn)?;
+        }
         Commands::Evals {
             command: EvalCommands::Fetch,
         } => {
-            get_all_sids(&mut conn).await?;
+            // get_all_sids(&mut conn).await?;
+            let cse120 = schema::courses::table
+                .filter(schema::courses::code.eq("CSE|120"))
+                .get_result::<Course>(&mut conn)?;
+            println!("{:?}", cse120);
+            evaluations::test(&mut conn, 249319, &cse120).await?;
         }
         Commands::Evals {
             command: EvalCommands::Stats,
-        } => {}
+        } => {
+            // let evals = schema::evaluations::table
+            //     .filter(schema::evaluations::sid.ne(0))
+            //     .load::<Evaluation>(&mut conn)?;
+            // println!("{:#?}", evals);
+        }
     }
 
     Ok(())

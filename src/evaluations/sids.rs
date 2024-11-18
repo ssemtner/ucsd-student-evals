@@ -1,10 +1,9 @@
 use crate::common;
 use crate::database::Course;
 use crate::schema::courses;
-use crate::settings;
 use anyhow::{anyhow, Result};
 use diesel::{QueryDsl, RunQueryDsl, SelectableHelper, SqliteConnection};
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{stream, StreamExt};
 use regex::Regex;
 use reqwest::Client;
 use std::error::Error;
@@ -36,7 +35,7 @@ pub async fn get_all_sids(conn: &mut SqliteConnection) -> Result<()> {
                             start.elapsed()
                         ));
                     }
-                    Err(err) => {
+                    Err(_) => {
                         pb.println(format!(
                             "[-] error in {}: adding to retry queue",
                             course.name
@@ -104,9 +103,8 @@ pub async fn get_all_sids(conn: &mut SqliteConnection) -> Result<()> {
 }
 
 async fn get_sids(client: &Client, course: &Course) -> Result<Vec<u32>> {
-    let start = Instant::now();
     let res = client
-        .post(format!("{}/Modules/Evals/SET/Reports/Search.aspx", settings().base_url))
+        .post("https://academicaffairs.ucsd.edu/Modules/Evals/SET/Reports/Search.aspx")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .form(&[
             ("__EVENTTARGET", "".to_string()),
@@ -121,8 +119,6 @@ async fn get_sids(client: &Client, course: &Course) -> Result<Vec<u32>> {
         .await?;
 
     let text = res.text().await?;
-    // println!("got text {:?}", start.elapsed());
-    let start = Instant::now();
 
     let re = Regex::new(r#"window\.open\('SETSummary\.aspx\?sid=([0-9]*?)',"#)?;
     let res = re
@@ -134,7 +130,6 @@ async fn get_sids(client: &Client, course: &Course) -> Result<Vec<u32>> {
         })
         .collect::<Result<Vec<u32>>>();
 
-    // println!("got matches {:?}", start.elapsed());
     res
 }
 

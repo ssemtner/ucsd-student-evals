@@ -1,9 +1,8 @@
 use crate::common;
 use crate::database::{Course, Unit};
 use crate::schema::{courses, units};
-use crate::settings;
 use anyhow::Result;
-use diesel::{RunQueryDsl, SqliteConnection};
+    use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
 use futures::{stream, StreamExt};
 use reqwest::Client;
 use serde::Deserialize;
@@ -19,6 +18,16 @@ struct ResponseItem {
 #[derive(Deserialize)]
 struct ResponseList {
     d: Vec<ResponseItem>,
+}
+
+pub fn display_stats(conn: &mut SqliteConnection) -> Result<()> {
+    let unit_count = units::table.count().get_result::<i64>(conn)?;
+    let course_count = courses::table.count().get_result::<i64>(conn)?;
+
+    println!("Units: {}", unit_count);
+    println!("Courses: {}", course_count);
+
+    Ok(())
 }
 
 pub async fn get_all_courses(conn: &mut SqliteConnection) -> Result<()> {
@@ -77,10 +86,7 @@ async fn get_units(client: &Client) -> Result<Vec<Unit>> {
     body.insert("contextKey", "UnitID:0");
 
     let res = client
-        .post(format!(
-            "{}/Modules/Evals/SET/Reports/Search.aspx/GetUnits",
-            settings().base_url
-        ))
+        .post("https://academicaffairs.ucsd.edu/Modules/Evals/SET/Reports/Search.aspx/GetUnits")
         .json(&body)
         .send()
         .await?;
@@ -100,17 +106,13 @@ async fn get_units(client: &Client) -> Result<Vec<Unit>> {
 }
 
 async fn get_courses(client: &Client, unit_id: i32) -> Result<Vec<Course>> {
-    let start = Instant::now();
     let mut body = HashMap::new();
     body.insert("knownCategoryValues", format!("Unit:{}", unit_id));
     body.insert("category", "Course".to_string());
     body.insert("contextKey", "SubjectCode:;CourseCode:".to_string());
 
     let res = client
-        .post(format!(
-            "{}/Modules/Evals/SET/Reports/Search.aspx/GetCourses",
-            settings().base_url
-        ))
+        .post("https://academicaffairs.ucsd.edu/Modules/Evals/SET/Reports/Search.aspx/GetCourses")
         .json(&body)
         .send()
         .await?;
