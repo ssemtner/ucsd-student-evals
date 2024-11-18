@@ -1,23 +1,20 @@
 use crate::common;
-use crate::database::Course;
-use crate::schema::courses;
+use crate::database::{Course, SectionId};
+use crate::schema::{courses, sids};
 use anyhow::{anyhow, Result};
-use diesel::{QueryDsl, RunQueryDsl, SelectableHelper, SqliteConnection};
+use diesel::{insert_or_ignore_into, QueryDsl, RunQueryDsl, SelectableHelper, SqliteConnection};
 use futures::{stream, StreamExt};
 use regex::Regex;
 use reqwest::Client;
-use std::error::Error;
-use std::fmt;
 use tokio::time::Instant;
 
-pub async fn get_all_sids(conn: &mut SqliteConnection) -> Result<()> {
+pub async fn save_all_sids(conn: &mut SqliteConnection) -> Result<()> {
     let courses = courses::table
         .select(Course::as_select())
         .get_results(conn)?;
 
     let client = common::client()?;
 
-    let courses = Vec::from(courses.split_at(100).0);
     let pb = common::progress_bar(courses.len() as u64);
     let results = stream::iter(&courses)
         .map(|course| {
@@ -43,48 +40,40 @@ pub async fn get_all_sids(conn: &mut SqliteConnection) -> Result<()> {
                     }
                 };
                 pb.inc(1);
-                res.map_err(|err| ErrorWrapper {
-                    error: err,
-                    value: course,
-                })
+                (course, res)
             }
         })
-        .buffer_unordered(4)
+        .buffer_unordered(20)
         .collect::<Vec<_>>()
         .await;
 
     pb.finish();
 
-    let (sids, errors): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
-    let mut sids = sids
+    let (sids, errors): (Vec<_>, Vec<_>) = results.into_iter().partition(|(_, res)| res.is_ok());
+    let sids = sids
         .into_iter()
-        .flat_map(Result::unwrap)
+        .flat_map(|(course, res)| res.unwrap().into_iter().map(move |sid| (course, sid)))
         .collect::<Vec<_>>();
     let errors = errors
         .into_iter()
-        .map(Result::unwrap_err)
+        .map(|(course, _)| course)
         .collect::<Vec<_>>();
 
     println!("Found {} SIDs with {} errors", sids.len(), errors.len());
-    if errors.len() > 0 {
-        let mut problems: Vec<Course> = errors
-            .into_iter()
-            .map(|wrapper| wrapper.value.clone())
-            .collect();
+
+    let mut sids = Vec::new();
+    if !errors.is_empty() {
+        let mut problems = errors;
 
         let pb = common::progress_bar(problems.len() as u64);
 
-        let mut prev_count = 0;
-
-        while problems.len() != prev_count {
-            prev_count = problems.len();
-
+        while !problems.is_empty() {
             // try to fix them
             let mut fixed = Vec::new();
-            for (i, course) in problems.iter().enumerate() {
+            for (i, &course) in problems.iter().enumerate() {
                 if let Ok(results) = get_sids(&client, course).await {
                     fixed.push(i);
-                    sids.extend(results);
+                    sids.extend(results.into_iter().map(|sid| (course, sid)));
                     pb.println(format!("[+] fixed {}", course.name));
                     pb.inc(1);
                 }
@@ -99,10 +88,22 @@ pub async fn get_all_sids(conn: &mut SqliteConnection) -> Result<()> {
         println!("Now at {} SIDs", sids.len());
     }
 
+    let count = insert_or_ignore_into(sids::table)
+        .values(
+            sids.into_iter()
+                .map(|(course, sid)| SectionId {
+                    sid,
+                    course_code: course.code.clone(),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .execute(conn)?;
+    println!("{count} SIDs saved");
+
     Ok(())
 }
 
-async fn get_sids(client: &Client, course: &Course) -> Result<Vec<u32>> {
+async fn get_sids(client: &Client, course: &Course) -> Result<Vec<i32>> {
     let res = client
         .post("https://academicaffairs.ucsd.edu/Modules/Evals/SET/Reports/Search.aspx")
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -114,10 +115,7 @@ async fn get_sids(client: &Client, course: &Course) -> Result<Vec<u32>> {
                 format!("{}:::{}", course.code, course.name.replace(" ", "+"))
             ),
             ("ctl00$ctl00$ContentPlaceHolder1$EvalsContentPlaceHolder$btnSubmit", "Search".to_string())
-        ])
-        .send()
-        .await?;
-
+        ]).send().await?;
     let text = res.text().await?;
 
     let re = Regex::new(r#"window\.open\('SETSummary\.aspx\?sid=([0-9]*?)',"#)?;
@@ -126,31 +124,9 @@ async fn get_sids(client: &Client, course: &Course) -> Result<Vec<u32>> {
         .map(|c| {
             c.get(1)
                 .ok_or(anyhow!("Match had no groups"))
-                .map(|m| m.as_str().parse::<u32>().unwrap())
+                .map(|m| m.as_str().parse::<i32>().unwrap())
         })
-        .collect::<Result<Vec<u32>>>();
+        .collect::<Result<Vec<_>>>();
 
     res
-}
-
-#[derive(Debug)]
-pub struct ErrorWrapper<T> {
-    error: anyhow::Error,
-    value: T,
-}
-
-impl<T: fmt::Debug> fmt::Display for ErrorWrapper<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ErrorWrapper {{ error: {}, value: {:?} }}",
-            self.error, self.value
-        )
-    }
-}
-
-impl<T: fmt::Debug> Error for ErrorWrapper<T> {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.error.as_ref())
-    }
 }

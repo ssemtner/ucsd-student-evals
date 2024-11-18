@@ -29,6 +29,7 @@ pub fn client() -> reqwest::Result<Client> {
     headers.insert("Cookie", HeaderValue::from_str(&get_cookies()).unwrap());
 
     Client::builder()
+        // .timeout(std::time::Duration::from_secs(3))
         .default_headers(headers)
         .proxy(
             Proxy::all(format!("{}:5000", settings().proxy_url))?

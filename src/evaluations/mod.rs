@@ -1,5 +1,5 @@
 mod parser;
-mod sids;
+pub mod sids;
 
 pub use parser::*;
 
@@ -23,8 +23,8 @@ fn get_or_create_term_id(conn: &mut SqliteConnection, name: String) -> Result<i3
             let id = insert_into(schema::terms::table)
                 .values(NewTerm { name })
                 .returning(schema::terms::id)
-                .execute(conn)?;
-            Ok(id as i32)
+                .get_result(conn)?;
+            Ok(id)
         }
     }
 }
@@ -42,8 +42,8 @@ fn get_or_create_instructor_id(conn: &mut SqliteConnection, name: String) -> Res
             let id = insert_into(schema::instructors::table)
                 .values(NewInstructor { name })
                 .returning(schema::instructors::id)
-                .execute(conn)?;
-            Ok(id as i32)
+                .get_result::<i32>(conn)?;
+            Ok(id)
         }
     }
 }

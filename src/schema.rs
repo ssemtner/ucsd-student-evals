@@ -43,6 +43,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    sids (sid) {
+        sid -> Integer,
+        course_code -> Text,
+    }
+}
+
+diesel::table! {
     terms (id) {
         id -> Integer,
         name -> Text,
@@ -60,11 +67,13 @@ diesel::joinable!(courses -> units (unit_id));
 diesel::joinable!(evaluations -> courses (course_code));
 diesel::joinable!(evaluations -> instructors (instructor_id));
 diesel::joinable!(evaluations -> terms (term_id));
+diesel::joinable!(sids -> courses (course_code));
 
 diesel::allow_tables_to_appear_in_same_query!(
     courses,
     evaluations,
     instructors,
+    sids,
     terms,
     units,
 );

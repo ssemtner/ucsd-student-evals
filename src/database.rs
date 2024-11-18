@@ -8,7 +8,6 @@ use diesel::sql_types::Text;
 use diesel::sqlite::Sqlite;
 use diesel::{deserialize, serialize, AsExpression, FromSqlRow};
 use serde::{Deserialize, Serialize};
-use std::fmt::Write;
 
 pub fn establish_connection() -> Result<SqliteConnection> {
     SqliteConnection::establish(&settings().database_url).map_err(|e| e.into())
@@ -31,6 +30,17 @@ pub struct Course {
     pub code: String,
     pub name: String,
     pub unit_id: i32,
+}
+
+#[derive(
+    Queryable, Selectable, Insertable, Identifiable, Associations, Debug, PartialEq, Clone,
+)]
+#[diesel(primary_key(sid))]
+#[diesel(belongs_to(Course, foreign_key = course_code))]
+#[diesel(table_name = crate::schema::sids)]
+pub struct SectionId {
+    pub sid: i32,
+    pub course_code: String,
 }
 
 #[derive(Debug, AsExpression, Deserialize, Serialize, FromSqlRow, PartialEq)]
@@ -60,12 +70,6 @@ impl JsonArray {
 impl<const N: usize> From<[u32; N]> for JsonArray {
     fn from(value: [u32; N]) -> Self {
         Self::new(value)
-    }
-}
-
-impl<const N: usize> Into<[u32; N]> for JsonArray {
-    fn into(self) -> [u32; N] {
-        self.into_vec().try_into().unwrap()
     }
 }
 
@@ -131,7 +135,7 @@ pub struct Term {
 #[derive(Insertable, Debug)]
 #[diesel(table_name = crate::schema::terms)]
 pub struct NewTerm {
-    pub name: String
+    pub name: String,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Debug)]
@@ -144,5 +148,5 @@ pub struct Instructor {
 #[derive(Insertable, Debug)]
 #[diesel(table_name = crate::schema::instructors)]
 pub struct NewInstructor {
-    pub name: String
+    pub name: String,
 }

@@ -1,28 +1,30 @@
-use crate::common;
 use crate::database;
 use crate::database::Course;
 use crate::evaluations::{get_or_create_instructor_id, get_or_create_term_id};
 use crate::schema;
 use anyhow::{anyhow, Result};
-use diesel::dsl::insert_into;
+use diesel::dsl::{insert_into, insert_or_ignore_into, replace_into};
 use diesel::{RunQueryDsl, SqliteConnection};
-use futures::StreamExt;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
+use std::time::Duration;
 use tokio::time::Instant;
 use tokio_retry::strategy::{jitter, FixedInterval};
 use tokio_retry::Retry;
 
-pub async fn test(conn: &mut SqliteConnection, sid: i32, course: &Course) -> Result<()> {
-    let client = common::client()?;
+pub async fn save_eval(
+    conn: &mut SqliteConnection,
+    client: &Client,
+    sid: i32,
+    course: &Course,
+) -> Result<()> {
     let start = Instant::now();
-    let html = get_eval_html(&client, sid).await?;
-    println!("{:?} to get html", start.elapsed());
-    let start = Instant::now();
+
+    let html = get_eval_html(client, sid).await?;
     let eval = parse(&html, sid, course)?;
     let db_eval = eval.into_database_eval(conn)?;
-    insert_into(schema::evaluations::table)
+    replace_into(schema::evaluations::table)
         .values(&db_eval)
         .execute(conn)?;
 
@@ -37,7 +39,11 @@ async fn get_eval_html(client: &Client, sid: i32) -> Result<Html> {
 
     let action = || async {
         println!("trying to fetch");
-        let res = client.get(url.clone()).send().await?;
+        let res = client
+            .get(url.clone())
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await?;
         res.text().await
     };
     let text = Retry::spawn(FixedInterval::from_millis(1000).map(jitter).take(3), action).await?;

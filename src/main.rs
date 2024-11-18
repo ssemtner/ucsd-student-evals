@@ -1,4 +1,4 @@
-use diesel::ExpressionMethods;
+use diesel::{BelongingToDsl, ExpressionMethods};
 mod common;
 mod cookies;
 mod courses;
@@ -7,7 +7,9 @@ mod evaluations;
 mod schema;
 
 use crate::courses::get_all_courses;
-use crate::database::{establish_connection, Course};
+use crate::database::{establish_connection, Course, Evaluation, SectionId};
+use crate::evaluations::save_eval;
+use crate::evaluations::sids::save_all_sids;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use config::Config;
@@ -62,6 +64,7 @@ enum CourseCommands {
 enum EvalCommands {
     Stats,
     Fetch,
+    Sids,
 }
 
 #[tokio::main]
@@ -99,22 +102,41 @@ async fn main() -> Result<()> {
             courses::display_stats(&mut conn)?;
         }
         Commands::Evals {
+            command: EvalCommands::Sids,
+        } => {
+            save_all_sids(&mut conn).await?;
+        }
+        Commands::Evals {
             command: EvalCommands::Fetch,
         } => {
-            // get_all_sids(&mut conn).await?;
-            let cse120 = schema::courses::table
-                .filter(schema::courses::code.eq("CSE|120"))
+            let course = schema::courses::table
+                .filter(schema::courses::code.eq("CSE|123"))
                 .get_result::<Course>(&mut conn)?;
-            println!("{:?}", cse120);
-            evaluations::test(&mut conn, 249319, &cse120).await?;
+            let sids = SectionId::belonging_to(&course)
+                .select(schema::sids::sid)
+                .load::<i32>(&mut conn)?;
+            println!("{:?}", course);
+            println!("{:?} = {}", sids, sids.len());
+            let client = common::client()?;
+            for sid in sids {
+                save_eval(&mut conn, &client, sid, &course).await?;
+            }
         }
         Commands::Evals {
             command: EvalCommands::Stats,
         } => {
-            // let evals = schema::evaluations::table
-            //     .filter(schema::evaluations::sid.ne(0))
-            //     .load::<Evaluation>(&mut conn)?;
-            // println!("{:#?}", evals);
+            let evals = schema::evaluations::table
+                .count()
+                .get_result::<i64>(&mut conn)?;
+            let sections = schema::sids::table
+                .filter(
+                    schema::sids::sid
+                        .ne_all(schema::evaluations::table.select(schema::evaluations::sid)),
+                )
+                .count()
+                .get_result::<i64>(&mut conn)?;
+            println!("{} evals", evals);
+            println!("{} sections with no eval", sections);
         }
     }
 
