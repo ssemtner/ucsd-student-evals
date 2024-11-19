@@ -50,7 +50,7 @@ pub async fn save_all_sids(conn: &mut SqliteConnection) -> Result<()> {
     pb.finish();
 
     let (sids, errors): (Vec<_>, Vec<_>) = results.into_iter().partition(|(_, res)| res.is_ok());
-    let sids = sids
+    let mut sids = sids
         .into_iter()
         .flat_map(|(course, res)| res.unwrap().into_iter().map(move |sid| (course, sid)))
         .collect::<Vec<_>>();
@@ -61,7 +61,6 @@ pub async fn save_all_sids(conn: &mut SqliteConnection) -> Result<()> {
 
     println!("Found {} SIDs with {} errors", sids.len(), errors.len());
 
-    let mut sids = Vec::new();
     if !errors.is_empty() {
         let mut problems = errors;
 
