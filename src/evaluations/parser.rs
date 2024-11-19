@@ -1,52 +1,84 @@
-use crate::database;
 use crate::database::Course;
 use crate::evaluations::{get_or_create_instructor_id, get_or_create_term_id};
-use crate::schema;
+use crate::schema::evaluations::dsl::evaluations;
+use crate::{common, database};
 use anyhow::{anyhow, Result};
-use diesel::dsl::{insert_into, insert_or_ignore_into, replace_into};
-use diesel::{RunQueryDsl, SqliteConnection};
+use diesel::{insert_into, RunQueryDsl, SqliteConnection};
+use futures::{stream, StreamExt};
+use indicatif::ProgressBar;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
-use std::time::Duration;
 use tokio::time::Instant;
-use tokio_retry::strategy::{jitter, FixedInterval};
-use tokio_retry::Retry;
 
-pub async fn save_eval(
+pub async fn save_evals(
     conn: &mut SqliteConnection,
-    client: &Client,
-    sid: i32,
     course: &Course,
+    sids: Vec<i32>,
+    pb: &ProgressBar,
 ) -> Result<()> {
+    let client = common::client()?;
+
+    pb.set_length(sids.len() as u64);
+    let results = stream::iter(&sids)
+        .map(|sid| {
+            let client = &client;
+            let course = course.clone();
+            async move {
+                let start = Instant::now();
+                let res = get_eval(client, *sid, &course).await;
+                pb.inc(1);
+                pb.println(format!("Parsed section {} in {:?}", sid, start.elapsed()));
+                res
+            }
+        })
+        .buffer_unordered(6)
+        .collect::<Vec<_>>()
+        .await;
+
+    let (successes, failures): (Vec<_>, Vec<_>) = results.into_iter().partition(|x| x.is_ok());
+
+    let successes = successes
+        .into_iter()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    let failures = failures
+        .into_iter()
+        .map(Result::unwrap_err)
+        .collect::<Vec<_>>();
+
+    pb.println(format!("{} failures for {}", failures.len(), course.name));
+
+    let saved = insert_into(evaluations)
+        .values(
+            successes
+                .into_iter()
+                .filter_map(|eval| eval.into_database_eval(conn).ok())
+                .collect::<Vec<_>>(),
+        )
+        .execute(conn)?;
+
+    pb.println(format!("Saved {} evaluations for {}", saved, course.name));
+
+    Ok(())
+}
+
+async fn get_eval(client: &Client, sid: i32, course: &Course) -> Result<Evaluation> {
     let start = Instant::now();
 
     let html = get_eval_html(client, sid).await?;
     let eval = parse(&html, sid, course)?;
-    let db_eval = eval.into_database_eval(conn)?;
-    replace_into(schema::evaluations::table)
-        .values(&db_eval)
-        .execute(conn)?;
 
-    println!("{:?}", start.elapsed());
-    Ok(())
+    Ok(eval)
 }
 
 async fn get_eval_html(client: &Client, sid: i32) -> Result<Html> {
     let url = format!(
         "https://academicaffairs.ucsd.edu/Modules/Evals/SET/Reports/SETSummary.aspx?sid={sid}"
     );
-
-    let action = || async {
-        println!("trying to fetch");
-        let res = client
-            .get(url.clone())
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await?;
-        res.text().await
-    };
-    let text = Retry::spawn(FixedInterval::from_millis(1000).map(jitter).take(3), action).await?;
+    let start = Instant::now();
+    let res = client.get(url.clone()).send().await?;
+    let text = res.text().await?;
 
     Ok(Html::parse_document(&text))
 }
@@ -161,7 +193,7 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
         let selector = Selector::parse(
             "#ContentPlaceHolder1_EvalsContentPlaceHolder_lblSummaryTitle > p:nth-child(2)",
         )
-        .unwrap();
+            .unwrap();
         let mut stats = html
             .select(&selector)
             .next()
@@ -191,7 +223,7 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
         Selector::parse(
             "#ContentPlaceHolder1_EvalsContentPlaceHolder_tblExpectedGrades > tbody > tr",
         )
-        .unwrap(),
+            .unwrap(),
     )?;
 
     let actual_grades = parse_grades_table(
@@ -199,7 +231,7 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
         Selector::parse(
             "#ContentPlaceHolder1_EvalsContentPlaceHolder_tblGradesReceived > tbody > tr",
         )
-        .unwrap(),
+            .unwrap(),
     )?;
 
     let (hours, materials, scales_range) = match parse_scale(html, 14) {

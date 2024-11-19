@@ -1,4 +1,3 @@
-use diesel::{BelongingToDsl, ExpressionMethods};
 mod common;
 mod cookies;
 mod courses;
@@ -7,14 +6,15 @@ mod evaluations;
 mod schema;
 
 use crate::courses::get_all_courses;
-use crate::database::{establish_connection, Course, Evaluation, SectionId};
-use crate::evaluations::save_eval;
+use crate::database::{establish_connection, Course, SectionId};
+use crate::evaluations::save_evals;
 use crate::evaluations::sids::save_all_sids;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use config::Config;
+use diesel::{BelongingToDsl, ExpressionMethods};
 use diesel::{QueryDsl, RunQueryDsl};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use std::time::Duration;
 use tokio::sync::OnceCell;
@@ -63,7 +63,7 @@ enum CourseCommands {
 #[derive(Subcommand)]
 enum EvalCommands {
     Stats,
-    Fetch,
+    Fetch { courses: i64 },
     Sids,
 }
 
@@ -77,6 +77,8 @@ async fn main() -> Result<()> {
     }
 
     let mut conn = establish_connection()?;
+
+    env_logger::init();
 
     let cli = Cli::parse();
 
@@ -107,20 +109,37 @@ async fn main() -> Result<()> {
             save_all_sids(&mut conn).await?;
         }
         Commands::Evals {
-            command: EvalCommands::Fetch,
+            command: EvalCommands::Fetch { courses: count },
         } => {
-            let course = schema::courses::table
-                .filter(schema::courses::code.eq("CSE|123"))
-                .get_result::<Course>(&mut conn)?;
-            let sids = SectionId::belonging_to(&course)
-                .select(schema::sids::sid)
-                .load::<i32>(&mut conn)?;
-            println!("{:?}", course);
-            println!("{:?} = {}", sids, sids.len());
-            let client = common::client()?;
-            for sid in sids {
-                save_eval(&mut conn, &client, sid, &course).await?;
+            let unprocessed_query = schema::sids::table
+                .select(schema::sids::course_code)
+                .filter(
+                    schema::sids::sid
+                        .ne_all(schema::evaluations::table.select(schema::evaluations::sid)),
+                );
+
+            let courses = schema::courses::table
+                .filter(schema::courses::code.eq_any(unprocessed_query))
+                .limit(count)
+                .get_results::<Course>(&mut conn)?;
+            println!("Fetching evaluations for {:?}", courses);
+            let m = MultiProgress::new();
+
+            let overall = m.add(common::progress_bar(courses.len() as u64));
+            overall.set_message("Courses");
+
+            for course in courses {
+                let sids = SectionId::belonging_to(&course)
+                    .select(schema::sids::sid)
+                    .get_results(&mut conn)?;
+                let pb = m.insert_before(&overall, common::progress_bar(sids.len() as u64));
+                pb.println(format!("Found {} sids for {}", sids.len(), course.code));
+                save_evals(&mut conn, &course, sids, &pb).await?;
+                pb.finish();
+                overall.inc(1);
             }
+            overall.finish();
+            println!("Done");
         }
         Commands::Evals {
             command: EvalCommands::Stats,
