@@ -5,6 +5,7 @@ mod database;
 mod evaluations;
 mod schema;
 
+use crate::common::progress_bar;
 use crate::courses::get_all_courses;
 use crate::database::{establish_connection, Course, SectionId};
 use crate::evaluations::save_evals;
@@ -63,7 +64,7 @@ enum CourseCommands {
 #[derive(Subcommand)]
 enum EvalCommands {
     Stats,
-    Fetch { courses: i64 },
+    Fetch { course: Option<String> },
     Sids,
 }
 
@@ -115,7 +116,7 @@ async fn main() -> Result<()> {
             save_all_sids(&mut conn).await?;
         }
         Commands::Evals {
-            command: EvalCommands::Fetch { courses: count },
+            command: EvalCommands::Fetch { course: None },
         } => {
             let unprocessed_query = schema::sids::table
                 .select(schema::sids::course_code)
@@ -126,9 +127,7 @@ async fn main() -> Result<()> {
 
             let courses = schema::courses::table
                 .filter(schema::courses::code.eq_any(unprocessed_query))
-                .limit(count)
                 .get_results::<Course>(&mut conn)?;
-            println!("Fetching evaluations for {:?}", courses);
             let m = MultiProgress::new();
 
             let overall = m.add(common::progress_bar(courses.len() as u64));
@@ -137,8 +136,10 @@ async fn main() -> Result<()> {
             for course in courses {
                 let sids = SectionId::belonging_to(&course)
                     .select(schema::sids::sid)
-                    .filter(schema::sids::sid
-                        .ne_all(schema::evaluations::table.select(schema::evaluations::sid)))
+                    .filter(
+                        schema::sids::sid
+                            .ne_all(schema::evaluations::table.select(schema::evaluations::sid)),
+                    )
                     .get_results(&mut conn)?;
                 let pb = m.insert_before(&overall, common::progress_bar(sids.len() as u64));
                 pb.println(format!("Found {} sids for {}", sids.len(), course.code));
@@ -150,6 +151,26 @@ async fn main() -> Result<()> {
                 overall.inc(1);
             }
             overall.finish();
+            println!("Done");
+        }
+        Commands::Evals {
+            command: EvalCommands::Fetch {
+                course: Some(course),
+            },
+        } => {
+            let course = schema::courses::table
+                .filter(schema::courses::code.eq(course.replace(" ", "|")))
+                .get_result::<Course>(&mut conn)?;
+            let sids = SectionId::belonging_to(&course)
+                .filter(
+                    schema::sids::sid
+                        .ne_all(schema::evaluations::table.select(schema::evaluations::sid)),
+                )
+                .select(schema::sids::sid)
+                .get_results::<i32>(&mut conn)?;
+            let pb = progress_bar(sids.len() as u64);
+            save_evals(&mut conn, &course, sids, &pb).await?;
+            pb.finish();
             println!("Done");
         }
         Commands::Evals {

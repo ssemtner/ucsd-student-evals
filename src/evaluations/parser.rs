@@ -9,6 +9,7 @@ use indicatif::ProgressBar;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
+use std::ops::Range;
 use tokio::time::Instant;
 
 pub async fn save_evals(
@@ -49,6 +50,9 @@ pub async fn save_evals(
 
     if !failures.is_empty() {
         pb.println(format!("{} failures for {}", failures.len(), course.name));
+        for failure in &failures {
+            pb.println(format!("{}", failure));
+        }
     }
 
     let saved = replace_into(evaluations)
@@ -66,8 +70,6 @@ pub async fn save_evals(
 }
 
 async fn get_eval(client: &Client, sid: i32, course: &Course) -> Result<Evaluation> {
-    let start = Instant::now();
-
     let html = get_eval_html(client, sid).await?;
     let eval = parse(&html, sid, course)?;
 
@@ -78,7 +80,6 @@ async fn get_eval_html(client: &Client, sid: i32) -> Result<Html> {
     let url = format!(
         "https://academicaffairs.ucsd.edu/Modules/Evals/SET/Reports/SETSummary.aspx?sid={sid}"
     );
-    let start = Instant::now();
     let res = client.get(url.clone()).send().await?;
     let text = res.text().await?;
 
@@ -167,7 +168,7 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
             .filter_map(|child| child.value().as_text());
         (
             iter.next()
-                .map(|s| s.split_once(&(course.name.clone() + ",")))
+                .map(|s| s.rmatch_indices(',').nth(1).map(|(i, _)| s.split_at(i + 2)))
                 .unwrap_or(None)
                 .ok_or(anyhow!("Could not find instructor name"))?
                 .1
@@ -195,7 +196,7 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
         let selector = Selector::parse(
             "#ContentPlaceHolder1_EvalsContentPlaceHolder_lblSummaryTitle > p:nth-child(2)",
         )
-            .unwrap();
+        .unwrap();
         let mut stats = html
             .select(&selector)
             .next()
@@ -225,25 +226,20 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
         Selector::parse(
             "#ContentPlaceHolder1_EvalsContentPlaceHolder_tblExpectedGrades > tbody > tr",
         )
-            .unwrap(),
-    )?;
+        .unwrap(),
+    )
+    .unwrap_or_default();
 
     let actual_grades = parse_grades_table(
         html,
         Selector::parse(
             "#ContentPlaceHolder1_EvalsContentPlaceHolder_tblGradesReceived > tbody > tr",
         )
-            .unwrap(),
+        .unwrap(),
     )?;
 
-    let (hours, materials, scales_range) = match parse_scale(html, 14) {
-        Ok(hours) => (Hours::Long(hours), parse_scale::<5>(html, 13)?, 0..12),
-        Err(_) => (
-            Hours::Short(parse_scale(html, 2)?),
-            parse_scale(html, 1)?,
-            4..16,
-        ),
-    };
+    let (hours, materials, scales_range) = parse_hours_materials(html)?;
+
     let scales = scales_range
         .map(|i| parse_scale::<6>(html, i))
         .collect::<Result<Vec<_>>>()?;
@@ -272,6 +268,23 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
         expected_grades,
         actual_grades,
     })
+}
+
+fn parse_hours_materials(html: &Html) -> Result<(Hours, [u32; 5], Range<u32>)> {
+    for long_hours_idx in 14..=20 {
+        if let Ok(hours) = parse_scale(html, long_hours_idx) {
+            return Ok((
+                Hours::Long(hours),
+                parse_scale::<5>(html, long_hours_idx - 1)?,
+                0..11,
+            ));
+        }
+    }
+    Ok((
+        Hours::Short(parse_scale(html, 2)?),
+        parse_scale(html, 1)?,
+        4..15,
+    ))
 }
 
 fn parse_grades_table(html: &Html, selector: Selector) -> Result<[u32; 7]> {
