@@ -67,6 +67,19 @@ enum EvalCommands {
     Sids,
 }
 
+async fn reauth() -> Result<()> {
+    let pb = ProgressBar::new_spinner();
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb.set_style(ProgressStyle::with_template("{spinner:.blue} {msg}")?);
+    pb.set_message("Fetching new cookies");
+
+    cookies::fetch_cookies(&settings().cookies_token).await?;
+
+    pb.finish_with_message("Done");
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     {
@@ -84,14 +97,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Reauth => {
-            let pb = ProgressBar::new_spinner();
-            pb.enable_steady_tick(Duration::from_millis(80));
-            pb.set_style(ProgressStyle::with_template("{spinner:.blue} {msg}")?);
-            pb.set_message("Fetching new cookies");
-
-            cookies::fetch_cookies(&settings().cookies_token).await?;
-
-            pb.finish_with_message("Done");
+            reauth().await?;
         }
         Commands::Courses {
             command: CourseCommands::Fetch,
@@ -131,10 +137,15 @@ async fn main() -> Result<()> {
             for course in courses {
                 let sids = SectionId::belonging_to(&course)
                     .select(schema::sids::sid)
+                    .filter(schema::sids::sid
+                        .ne_all(schema::evaluations::table.select(schema::evaluations::sid)))
                     .get_results(&mut conn)?;
                 let pb = m.insert_before(&overall, common::progress_bar(sids.len() as u64));
                 pb.println(format!("Found {} sids for {}", sids.len(), course.code));
-                save_evals(&mut conn, &course, sids, &pb).await?;
+                let success = save_evals(&mut conn, &course, sids, &pb).await?;
+                if !success {
+                    reauth().await?;
+                }
                 pb.finish();
                 overall.inc(1);
             }

@@ -3,7 +3,7 @@ use crate::evaluations::{get_or_create_instructor_id, get_or_create_term_id};
 use crate::schema::evaluations::dsl::evaluations;
 use crate::{common, database};
 use anyhow::{anyhow, Result};
-use diesel::{insert_into, RunQueryDsl, SqliteConnection};
+use diesel::{replace_into, RunQueryDsl, SqliteConnection};
 use futures::{stream, StreamExt};
 use indicatif::ProgressBar;
 use regex::Regex;
@@ -16,7 +16,7 @@ pub async fn save_evals(
     course: &Course,
     sids: Vec<i32>,
     pb: &ProgressBar,
-) -> Result<()> {
+) -> Result<bool> {
     let client = common::client()?;
 
     pb.set_length(sids.len() as u64);
@@ -47,9 +47,11 @@ pub async fn save_evals(
         .map(Result::unwrap_err)
         .collect::<Vec<_>>();
 
-    pb.println(format!("{} failures for {}", failures.len(), course.name));
+    if !failures.is_empty() {
+        pb.println(format!("{} failures for {}", failures.len(), course.name));
+    }
 
-    let saved = insert_into(evaluations)
+    let saved = replace_into(evaluations)
         .values(
             successes
                 .into_iter()
@@ -60,7 +62,7 @@ pub async fn save_evals(
 
     pb.println(format!("Saved {} evaluations for {}", saved, course.name));
 
-    Ok(())
+    Ok(failures.is_empty())
 }
 
 async fn get_eval(client: &Client, sid: i32, course: &Course) -> Result<Evaluation> {
