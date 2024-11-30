@@ -1,3 +1,4 @@
+mod api;
 mod common;
 mod cookies;
 mod courses;
@@ -53,6 +54,9 @@ enum Commands {
         command: EvalCommands,
     },
     Reauth,
+    Serve {
+        host: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -188,6 +192,12 @@ async fn main() -> Result<()> {
                 .get_result::<i64>(&mut conn)?;
             println!("{} evals", evals);
             println!("{} sections with no eval", sections);
+        }
+        Commands::Serve { host } => {
+            let app = api::app()?;
+            let listener =
+                tokio::net::TcpListener::bind(host.unwrap_or("0.0.0.0:3000".to_string())).await?;
+            axum::serve(listener, app).await?;
         }
     }
 

@@ -21,7 +21,15 @@ pub struct Unit {
 }
 
 #[derive(
-    Queryable, Selectable, Insertable, Identifiable, Associations, Debug, PartialEq, Clone,
+    Queryable,
+    Selectable,
+    Insertable,
+    Identifiable,
+    Associations,
+    serde::Serialize,
+    Debug,
+    PartialEq,
+    Clone,
 )]
 #[diesel(primary_key(code))]
 #[diesel(belongs_to(Unit))]
@@ -44,7 +52,7 @@ pub struct SectionId {
 }
 
 #[derive(Debug, AsExpression, Deserialize, Serialize, FromSqlRow, PartialEq)]
-#[sql_type = "Text"]
+#[diesel(sql_type = Text)]
 pub struct JsonArray(serde_json::Value);
 
 impl JsonArray {
@@ -95,7 +103,7 @@ where
     }
 }
 
-#[derive(Queryable, Insertable, Selectable, Identifiable, Debug, PartialEq)]
+#[derive(Queryable, Insertable, Selectable, Identifiable, Serialize, Debug, PartialEq)]
 #[diesel(primary_key(sid))]
 #[diesel(table_name = crate::schema::evaluations)]
 pub struct Evaluation {
@@ -138,7 +146,7 @@ pub struct NewTerm {
     pub name: String,
 }
 
-#[derive(Queryable, Selectable, Identifiable, Debug)]
+#[derive(Queryable, Selectable, Identifiable, Serialize, Debug)]
 #[diesel(table_name = crate::schema::instructors)]
 pub struct Instructor {
     pub id: i32,

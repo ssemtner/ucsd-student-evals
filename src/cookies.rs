@@ -6,7 +6,7 @@ use std::fs;
 const FILENAME: &str = "cookies.txt";
 
 pub fn get_cookies() -> String {
-    fs::read_to_string(&FILENAME).expect("Cookies file not found")
+    fs::read_to_string(FILENAME).expect("Cookies file not found")
 }
 
 #[derive(Deserialize)]

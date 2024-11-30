@@ -307,7 +307,7 @@ fn parse_grades_table(html: &Html, selector: Selector) -> Result<[u32; 7]> {
 
 fn parse_scale<const N: usize>(html: &Html, index: u32) -> Result<[u32; N]> {
     let mut result: [u32; N] = [0; N];
-    for i in 0..N {
+    for (i, item) in result.iter_mut().enumerate() {
         let selector = Selector::parse(&format!("#ContentPlaceHolder1_EvalsContentPlaceHolder_rptQuestionnaire_rptChoices_{index}_rbSelect_{i}"))
             .map_err(|e| anyhow!("{e:?}"))?;
         let text: String = html
@@ -317,7 +317,7 @@ fn parse_scale<const N: usize>(html: &Html, index: u32) -> Result<[u32; N]> {
             .text()
             .take(1)
             .collect();
-        result[i] = text.parse::<u32>()?;
+        *item = text.parse::<u32>()?;
     }
     Ok(result)
 }
