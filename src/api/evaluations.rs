@@ -1,17 +1,18 @@
 use crate::api::internal_error;
 use crate::database::Instructor;
+use crate::schema::terms;
 use crate::schema::{evaluations, instructors};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use deadpool_diesel::sqlite::Pool;
-use diesel::dsl::{avg, case_when, sql};
+use diesel::dsl::{avg, case_when, count_star, sql};
 use diesel::expression::SqlLiteral;
-use diesel::sql_types::{Double, Text};
+use diesel::sql_types::{BigInt, Double, Text};
 use diesel::{
-    define_sql_function, Column, CombineDsl, ExpressionMethods, NullableExpressionMethods,
-    QueryDsl, Queryable, RunQueryDsl, SelectableHelper, TextExpressionMethods,
+    define_sql_function, Column, CombineDsl, ExpressionMethods, QueryDsl, Queryable, RunQueryDsl,
+    SelectableHelper, TextExpressionMethods,
 };
 use serde::{Serialize, Serializer};
 use serde_json::json;
@@ -22,7 +23,7 @@ pub fn get_router() -> Router<Pool> {
         .route("/sid/:sid", get(eval_summary))
         .route("/:code", get(summary))
         .route("/:code/instructors", get(instructors))
-        .route("/:code/evals", get(list_evals))
+        .route("/:code/sections", get(list_evals))
 }
 
 async fn instructors(
@@ -67,6 +68,7 @@ async fn list_evals(
 
 #[derive(Queryable, Serialize)]
 struct Summary {
+    sections: i64,
     #[serde(rename = "actualGPA", serialize_with = "float_as_str")]
     actual_gpa: f64,
     #[serde(rename = "expectedGPA", serialize_with = "float_as_str")]
@@ -91,7 +93,9 @@ async fn summary(
 
     let res = conn
         .interact(move |conn| {
-            let q = evaluations::table.filter(evaluations::course_code.like(code));
+            let q = evaluations::table
+                .filter(evaluations::course_code.like(code))
+                .inner_join(terms::table);
             let actual_gpa_select = avg(extract_mean(evaluations::actual_grades, 5, |i| 4 - i));
             let expected_gpa_select = avg(extract_mean(evaluations::expected_grades, 5, |i| 4 - i));
             let hours_select = avg(case_when(
@@ -103,32 +107,35 @@ async fn summary(
                 .inner_join(instructors::table)
                 .group_by(instructors::id)
                 .select((
-                    instructors::name.nullable(),
+                    instructors::name,
                     actual_gpa_select.clone(),
                     expected_gpa_select.clone(),
                     hours_select.clone(),
+                    count_star(),
                 ))
                 .union_all(q.select((
-                    sql::<Text>("'overall'").nullable(),
+                    sql::<Text>("'overall'"),
                     actual_gpa_select,
                     expected_gpa_select,
                     hours_select,
+                    count_star(),
                 )))
-                .get_results::<(Option<String>, Option<f64>, Option<f64>, Option<f64>)>(conn)
+                .get_results::<(String, Option<f64>, Option<f64>, Option<f64>, i64)>(conn)
         })
         .await
         .map_err(internal_error)?
         .map_err(internal_error)?;
     let res: HashMap<String, Summary> = res
         .into_iter()
-        .filter_map(|(a, b, c, d)| a.zip(b).zip(c).zip(d).map(|(((a, b), c), d)| (a, b, c, d)))
-        .map(|(instructor, actual_gpa, expected_gpa, hours)| {
+        .filter_map(|(a, b, c, d, e)| b.zip(c).zip(d).map(|((b, c), d)| (a, b, c, d, e)))
+        .map(|(instructor, actual_gpa, expected_gpa, hours, count)| {
             (
                 instructor,
                 Summary {
                     actual_gpa,
                     expected_gpa,
                     hours,
+                    sections: count,
                 },
             )
         })
@@ -146,7 +153,9 @@ async fn eval_summary(
         .interact(move |conn| {
             evaluations::table
                 .filter(evaluations::sid.eq(sid))
+                .inner_join(terms::table)
                 .select((
+                    sql::<BigInt>("1"),
                     extract_mean(evaluations::actual_grades, 5, |i| 4 - i),
                     extract_mean(evaluations::expected_grades, 5, |i| 4 - i),
                     case_when(

@@ -96,8 +96,6 @@ async fn main() -> Result<()> {
 
     let mut conn = establish_connection()?;
 
-    env_logger::init();
-
     let cli = Cli::parse();
 
     match cli.command {
@@ -195,9 +193,9 @@ async fn main() -> Result<()> {
         }
         Commands::Serve { host } => {
             let app = api::app()?;
-            let listener =
-                tokio::net::TcpListener::bind(host.unwrap_or("0.0.0.0:3000".to_string())).await?;
-            axum::serve(listener, app).await?;
+            let host = host.unwrap_or("0.0.0.0:3000".to_string());
+            let listener = tokio::net::TcpListener::bind(&host).await?;
+            axum::serve(listener, app.into_make_service()).await?;
         }
     }
 
