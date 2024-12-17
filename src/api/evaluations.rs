@@ -6,7 +6,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use deadpool_diesel::sqlite::Pool;
+use deadpool_diesel::postgres::Pool;
 use diesel::dsl::{avg, case_when, count_star, sql};
 use diesel::expression::SqlLiteral;
 use diesel::sql_types::{BigInt, Double, Text};

@@ -6,7 +6,7 @@ use anyhow::Result;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::Router;
-use deadpool_diesel::sqlite::{Manager, Pool};
+use deadpool_diesel::postgres::{Manager, Pool};
 use deadpool_diesel::Runtime;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;

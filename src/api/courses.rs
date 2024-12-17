@@ -4,7 +4,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use deadpool_diesel::sqlite::Pool;
+use deadpool_diesel::postgres::Pool;
 use diesel::{QueryDsl, Queryable, RunQueryDsl, TextExpressionMethods};
 use serde::{Deserialize, Serialize};
 use serde_json::json;

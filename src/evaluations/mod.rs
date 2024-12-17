@@ -2,48 +2,40 @@ mod parser;
 pub mod sids;
 
 pub use parser::*;
+use sqlx::{query, Pool, Postgres};
 
-use crate::database::{NewInstructor, NewTerm};
-use crate::schema;
 use anyhow::Result;
-use diesel::dsl::insert_into;
-use diesel::prelude::*;
-use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
 
-fn get_or_create_term_id(conn: &mut SqliteConnection, name: String) -> Result<i32> {
-    let id = schema::terms::table
-        .filter(schema::terms::name.eq(&name))
-        .select(schema::terms::id)
-        .get_result::<i32>(conn)
-        .optional()?;
+async fn get_or_create_term_id(conn: &Pool<Postgres>, name: String) -> Result<i32> {
+    let id = query!(
+        "
+           INSERT INTO terms (name)
+           VALUES ($1)
+           ON CONFLICT (name) DO NOTHING
+           RETURNING id
+        ",
+        name
+    )
+    .fetch_one(conn)
+    .await?
+    .id;
 
-    match id {
-        Some(id) => Ok(id),
-        None => {
-            let id = insert_into(schema::terms::table)
-                .values(NewTerm { name })
-                .returning(schema::terms::id)
-                .get_result(conn)?;
-            Ok(id)
-        }
-    }
+    Ok(id)
 }
 
-fn get_or_create_instructor_id(conn: &mut SqliteConnection, name: String) -> Result<i32> {
-    let id = schema::instructors::table
-        .filter(schema::instructors::name.eq(&name))
-        .select(schema::instructors::id)
-        .get_result::<i32>(conn)
-        .optional()?;
+async fn get_or_create_instructor_id(conn: &Pool<Postgres>, name: String) -> Result<i32> {
+    let id = query!(
+        "
+            INSERT INTO instructors (name)
+            VALUES ($1)
+            ON CONFLICT (name) DO NOTHING
+            RETURNING id
+        ",
+        name
+    )
+    .fetch_one(conn)
+    .await?
+    .id;
 
-    match id {
-        Some(id) => Ok(id),
-        None => {
-            let id = insert_into(schema::instructors::table)
-                .values(NewInstructor { name })
-                .returning(schema::instructors::id)
-                .get_result::<i32>(conn)?;
-            Ok(id)
-        }
-    }
+    Ok(id)
 }

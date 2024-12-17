@@ -1,11 +1,10 @@
 use crate::common;
 use crate::database::{Course, Unit};
-use crate::schema::{courses, units};
 use anyhow::Result;
-    use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
 use futures::{stream, StreamExt};
 use reqwest::Client;
 use serde::Deserialize;
+use sqlx::{query, Pool, Postgres};
 use std::collections::HashMap;
 use tokio::time::Instant;
 
@@ -20,9 +19,18 @@ struct ResponseList {
     d: Vec<ResponseItem>,
 }
 
-pub fn display_stats(conn: &mut SqliteConnection) -> Result<()> {
-    let unit_count = units::table.count().get_result::<i64>(conn)?;
-    let course_count = courses::table.count().get_result::<i64>(conn)?;
+pub async fn display_stats(conn: &Pool<Postgres>) -> Result<()> {
+    let unit_count = query!("SELECT COUNT(*) FROM units")
+        .fetch_one(conn)
+        .await?
+        .count
+        .unwrap_or(0);
+
+    let course_count = query!("SELECT COUNT(*) FROM courses")
+        .fetch_one(conn)
+        .await?
+        .count
+        .unwrap_or(0);
 
     println!("Units: {}", unit_count);
     println!("Courses: {}", course_count);
@@ -30,14 +38,14 @@ pub fn display_stats(conn: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 
-pub async fn get_all_courses(conn: &mut SqliteConnection) -> Result<()> {
+pub async fn get_all_courses(conn: &Pool<Postgres>) -> Result<()> {
     let client = common::client()?;
 
     let units = get_units(&client).await?;
     println!("Found {:?} units", units.len());
 
     let pb = common::progress_bar(units.len() as u64);
-    let courses = stream::iter(&units)
+    let mut courses = stream::iter(&units)
         .map(|unit| {
             let client = &client;
             let pb = &pb;
@@ -64,15 +72,39 @@ pub async fn get_all_courses(conn: &mut SqliteConnection) -> Result<()> {
     pb.finish();
     println!("Found {:?} courses", courses.len());
 
-    let saved = diesel::replace_into(units::table)
-        .values(units)
-        .execute(conn)?;
+    let saved = query!(
+        "
+            INSERT INTO units (id, name)
+            SELECT * FROM UNNEST($1::int[], $2::text[])
+            ON CONFLICT (id) DO UPDATE
+            SET name = EXCLUDED.name
+        ",
+        &units.iter().map(|u| u.id).collect::<Vec<_>>()[..],
+        &units.into_iter().map(|u| u.name).collect::<Vec<_>>()[..]
+    )
+    .execute(conn)
+    .await?
+    .rows_affected();
 
     println!("Saved {} units", saved);
 
-    let saved = diesel::replace_into(courses::table)
-        .values(courses)
-        .execute(conn)?;
+    courses.sort_unstable_by(|a, b| a.code.cmp(&b.code));
+    courses.dedup_by(|a, b| a.code == b.code);
+
+    let saved = query!(
+        "
+            INSERT INTO courses (code, unit_id, name)
+            SELECT * FROM UNNEST($1::text[], $2::int[], $3::text[])
+            ON CONFLICT (code) DO UPDATE
+            SET name = EXCLUDED.name
+        ",
+        &courses.iter().map(|c| c.code.clone()).collect::<Vec<_>>()[..],
+        &courses.iter().map(|c| c.unit_id).collect::<Vec<_>>()[..],
+        &courses.into_iter().map(|c| c.name).collect::<Vec<_>>()[..]
+    )
+    .execute(conn)
+    .await?
+    .rows_affected();
 
     println!("Saved {} courses", saved);
 

@@ -1,68 +1,93 @@
+use crate::common;
 use crate::database::Course;
 use crate::evaluations::{get_or_create_instructor_id, get_or_create_term_id};
-use crate::schema::evaluations::dsl::evaluations;
-use crate::{common, database};
 use anyhow::{anyhow, Result};
-use diesel::{replace_into, RunQueryDsl, SqliteConnection};
-use futures::{stream, StreamExt};
 use indicatif::ProgressBar;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
+use sqlx::{query, Pool, Postgres};
 use std::ops::Range;
 use tokio::time::Instant;
 
 pub async fn save_evals(
-    conn: &mut SqliteConnection,
+    conn: &Pool<Postgres>,
     course: &Course,
     sids: Vec<i32>,
     pb: &ProgressBar,
 ) -> Result<bool> {
     let client = common::client()?;
 
+    let mut saved = 0;
+    let mut failures = Vec::new();
+
     pb.set_length(sids.len() as u64);
-    let results = stream::iter(&sids)
-        .map(|sid| {
-            let client = &client;
-            let course = course.clone();
-            async move {
-                let start = Instant::now();
-                let res = get_eval(client, *sid, &course).await;
-                pb.inc(1);
-                pb.println(format!("Parsed section {} in {:?}", sid, start.elapsed()));
-                res
+
+    for sid in &sids {
+        let start = Instant::now();
+        let res = get_eval(&client, *sid, course).await;
+        match res {
+            Ok(eval) => {
+                saved += query!(
+                    "
+                    INSERT INTO evaluations (
+                        sid, section_name, course_code, term_id, instructor_id,
+                        enrollment, responses,
+                        class_helped_understanding, assignments_helped_understanding, fair_exams,
+                        timely_feedback, developed_understanding, engaging, communication,
+                        help_opportunities, effective_methods, timeliness, welcoming, materials,
+                        hours, expected_grades, actual_grades
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5,
+                        $6, $7,
+                        $8, $9, $10,
+                        $11, $12, $13, $14,
+                        $15, $16, $17, $18, $19,
+                        $20, $21, $22
+                    )
+                ",
+                    eval.sid,
+                    eval.section_name,
+                    eval.course_code,
+                    get_or_create_term_id(conn, eval.term).await?,
+                    get_or_create_instructor_id(conn, eval.instructor).await?,
+                    eval.enrollment,
+                    eval.responses,
+                    &eval.class_helped_understanding[..],
+                    &eval.assignments_helped_understanding[..],
+                    &eval.fair_exams[..],
+                    &eval.timely_feedback[..],
+                    &eval.developed_understanding[..],
+                    &eval.engaging[..],
+                    &eval.communication[..],
+                    &eval.help_opportunities[..],
+                    &eval.effective_methods[..],
+                    &eval.timeliness[..],
+                    &eval.welcoming[..],
+                    &eval.materials[..],
+                    &eval.hours[..],
+                    &eval.expected_grades[..],
+                    &eval.actual_grades[..],
+                )
+                .execute(conn)
+                .await?
+                .rows_affected();
             }
-        })
-        .buffer_unordered(6)
-        .collect::<Vec<_>>()
-        .await;
-
-    let (successes, failures): (Vec<_>, Vec<_>) = results.into_iter().partition(|x| x.is_ok());
-
-    let successes = successes
-        .into_iter()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>();
-    let failures = failures
-        .into_iter()
-        .map(Result::unwrap_err)
-        .collect::<Vec<_>>();
+            Err(e) => {
+                failures.push((sid, e));
+            }
+        }
+        pb.inc(1);
+        pb.println(format!("Parsed section {} in {:?}", sid, start.elapsed()));
+    }
 
     if !failures.is_empty() {
         pb.println(format!("{} failures for {}", failures.len(), course.name));
         for failure in &failures {
-            pb.println(format!("{}", failure));
+            pb.println(format!("{:?}", failure));
         }
     }
-
-    let saved = replace_into(evaluations)
-        .values(
-            successes
-                .into_iter()
-                .filter_map(|eval| eval.into_database_eval(conn).ok())
-                .collect::<Vec<_>>(),
-        )
-        .execute(conn)?;
 
     pb.println(format!("Saved {} evaluations for {}", saved, course.name));
 
@@ -87,12 +112,6 @@ async fn get_eval_html(client: &Client, sid: i32) -> Result<Html> {
 }
 
 #[derive(Debug)]
-enum Hours {
-    Short([u32; 4]),
-    Long([u32; 11]),
-}
-
-#[derive(Debug)]
 struct Evaluation {
     sid: i32,
     section_name: String,
@@ -103,56 +122,21 @@ struct Evaluation {
     enrollment: i32,
     responses: i32,
 
-    class_helped_understanding: [u32; 6],
-    assignments_helped_understanding: [u32; 6],
-    fair_exams: [u32; 6],
-    timely_feedback: [u32; 6],
-    developed_understanding: [u32; 6],
-    engaging: [u32; 6],
-    communication: [u32; 6],
-    help_opportunities: [u32; 6],
-    effective_methods: [u32; 6],
-    timeliness: [u32; 6],
-    welcoming: [u32; 6],
-    materials: [u32; 5],
-    hours: Hours,
-    expected_grades: [u32; 7],
-    actual_grades: [u32; 7],
-}
-
-impl Evaluation {
-    fn into_database_eval(self, conn: &mut SqliteConnection) -> Result<database::Evaluation> {
-        Ok(database::Evaluation {
-            sid: self.sid,
-            section_name: self.section_name,
-            course_code: self.course_code,
-
-            term_id: get_or_create_term_id(conn, self.term)?,
-            instructor_id: get_or_create_instructor_id(conn, self.instructor)?,
-
-            enrollment: self.enrollment,
-            responses: self.responses,
-
-            class_helped_understanding: self.class_helped_understanding.into(),
-            assignments_helped_understanding: self.assignments_helped_understanding.into(),
-            fair_exams: self.fair_exams.into(),
-            timely_feedback: self.timely_feedback.into(),
-            developed_understanding: self.developed_understanding.into(),
-            engaging: self.engaging.into(),
-            communication: self.communication.into(),
-            help_opportunities: self.help_opportunities.into(),
-            effective_methods: self.effective_methods.into(),
-            timeliness: self.timeliness.into(),
-            welcoming: self.welcoming.into(),
-            materials: self.materials.into(),
-            hours: match self.hours {
-                Hours::Short(arr) => arr.into(),
-                Hours::Long(arr) => arr.into(),
-            },
-            expected_grades: self.expected_grades.into(),
-            actual_grades: self.actual_grades.into(),
-        })
-    }
+    class_helped_understanding: Vec<i32>,
+    assignments_helped_understanding: Vec<i32>,
+    fair_exams: Vec<i32>,
+    timely_feedback: Vec<i32>,
+    developed_understanding: Vec<i32>,
+    engaging: Vec<i32>,
+    communication: Vec<i32>,
+    help_opportunities: Vec<i32>,
+    effective_methods: Vec<i32>,
+    timeliness: Vec<i32>,
+    welcoming: Vec<i32>,
+    materials: Vec<i32>,
+    hours: Vec<i32>,
+    expected_grades: Vec<i32>,
+    actual_grades: Vec<i32>,
 }
 
 fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
@@ -252,17 +236,17 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
         instructor: instructor.to_string(),
         enrollment,
         responses,
-        class_helped_understanding: scales[0],
-        assignments_helped_understanding: scales[1],
-        fair_exams: scales[2],
-        timely_feedback: scales[3],
-        developed_understanding: scales[4],
-        engaging: scales[5],
-        communication: scales[6],
-        help_opportunities: scales[7],
-        effective_methods: scales[8],
-        timeliness: scales[9],
-        welcoming: scales[10],
+        class_helped_understanding: scales[0].clone(),
+        assignments_helped_understanding: scales[1].clone(),
+        fair_exams: scales[2].clone(),
+        timely_feedback: scales[3].clone(),
+        developed_understanding: scales[4].clone(),
+        engaging: scales[5].clone(),
+        communication: scales[6].clone(),
+        help_opportunities: scales[7].clone(),
+        effective_methods: scales[8].clone(),
+        timeliness: scales[9].clone(),
+        welcoming: scales[10].clone(),
         materials,
         hours,
         expected_grades,
@@ -270,24 +254,20 @@ fn parse(html: &Html, sid: i32, course: &Course) -> Result<Evaluation> {
     })
 }
 
-fn parse_hours_materials(html: &Html) -> Result<(Hours, [u32; 5], Range<u32>)> {
+fn parse_hours_materials(html: &Html) -> Result<(Vec<i32>, Vec<i32>, Range<u32>)> {
     for long_hours_idx in 14..=20 {
-        if let Ok(hours) = parse_scale(html, long_hours_idx) {
-            return Ok((
-                Hours::Long(hours),
-                parse_scale::<5>(html, long_hours_idx - 1)?,
-                0..11,
-            ));
+        if let Ok(hours) = parse_scale::<11>(html, long_hours_idx) {
+            return Ok((hours, parse_scale::<5>(html, long_hours_idx - 1)?, 0..11));
         }
     }
     Ok((
-        Hours::Short(parse_scale(html, 2)?),
-        parse_scale(html, 1)?,
+        parse_scale::<4>(html, 2)?,
+        parse_scale::<5>(html, 1)?,
         4..15,
     ))
 }
 
-fn parse_grades_table(html: &Html, selector: Selector) -> Result<[u32; 7]> {
+fn parse_grades_table(html: &Html, selector: Selector) -> Result<Vec<i32>> {
     let td_selector = Selector::parse("td").unwrap();
 
     html.select(&selector)
@@ -298,15 +278,14 @@ fn parse_grades_table(html: &Html, selector: Selector) -> Result<[u32; 7]> {
             col.text()
                 .collect::<String>()
                 .trim()
-                .parse::<u32>()
+                .parse::<i32>()
                 .map_err(|err| anyhow!(err))
         })
-        .collect::<Result<Vec<u32>>>()
-        .map(|vec| vec.try_into().unwrap())
+        .collect::<Result<Vec<i32>>>()
 }
 
-fn parse_scale<const N: usize>(html: &Html, index: u32) -> Result<[u32; N]> {
-    let mut result: [u32; N] = [0; N];
+fn parse_scale<const N: usize>(html: &Html, index: u32) -> Result<Vec<i32>> {
+    let mut result = vec![0; N];
     for (i, item) in result.iter_mut().enumerate() {
         let selector = Selector::parse(&format!("#ContentPlaceHolder1_EvalsContentPlaceHolder_rptQuestionnaire_rptChoices_{index}_rbSelect_{i}"))
             .map_err(|e| anyhow!("{e:?}"))?;
@@ -317,7 +296,7 @@ fn parse_scale<const N: usize>(html: &Html, index: u32) -> Result<[u32; N]> {
             .text()
             .take(1)
             .collect();
-        *item = text.parse::<u32>()?;
+        *item = text.parse::<i32>()?;
     }
     Ok(result)
 }

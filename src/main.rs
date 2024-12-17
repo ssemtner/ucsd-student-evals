@@ -1,23 +1,23 @@
-mod api;
+// mod api;
 mod common;
 mod cookies;
 mod courses;
 mod database;
 mod evaluations;
-mod schema;
 
 use crate::common::progress_bar;
 use crate::courses::get_all_courses;
-use crate::database::{establish_connection, Course, SectionId};
+use crate::database::establish_connection;
 use crate::evaluations::save_evals;
 use crate::evaluations::sids::save_all_sids;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use config::Config;
-use diesel::{BelongingToDsl, ExpressionMethods};
-use diesel::{QueryDsl, RunQueryDsl};
+use courses::display_stats;
+use database::Course;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde::Deserialize;
+use sqlx::{query, query_as};
 use std::time::Duration;
 use tokio::sync::OnceCell;
 
@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
         SETTINGS.set(settings.try_deserialize::<Settings>()?)?;
     }
 
-    let mut conn = establish_connection()?;
+    let conn = establish_connection().await?;
 
     let cli = Cli::parse();
 
@@ -105,47 +105,37 @@ async fn main() -> Result<()> {
         Commands::Courses {
             command: CourseCommands::Fetch,
         } => {
-            get_all_courses(&mut conn).await?;
+            get_all_courses(&conn).await?;
         }
         Commands::Courses {
             command: CourseCommands::Stats,
         } => {
-            courses::display_stats(&mut conn)?;
+            display_stats(&conn).await?;
         }
         Commands::Evals {
             command: EvalCommands::Sids,
         } => {
-            save_all_sids(&mut conn).await?;
+            save_all_sids(&conn).await?;
         }
         Commands::Evals {
             command: EvalCommands::Fetch { course: None },
         } => {
-            let unprocessed_query = schema::sids::table
-                .select(schema::sids::course_code)
-                .filter(
-                    schema::sids::sid
-                        .ne_all(schema::evaluations::table.select(schema::evaluations::sid)),
-                );
+            let courses = query_as!(Course, "SELECT code, name, unit_id FROM courses WHERE code IN (SELECT course_code FROM sids WHERE sid NOT IN (SELECT sid FROM evaluations))")
+                .fetch_all(&conn)
+                .await?;
 
-            let courses = schema::courses::table
-                .filter(schema::courses::code.eq_any(unprocessed_query))
-                .get_results::<Course>(&mut conn)?;
             let m = MultiProgress::new();
 
             let overall = m.add(common::progress_bar(courses.len() as u64));
             overall.set_message("Courses");
 
             for course in courses {
-                let sids = SectionId::belonging_to(&course)
-                    .select(schema::sids::sid)
-                    .filter(
-                        schema::sids::sid
-                            .ne_all(schema::evaluations::table.select(schema::evaluations::sid)),
-                    )
-                    .get_results(&mut conn)?;
+                let sids = query!("SELECT sid, course_code FROM sids WHERE course_code = $1 AND sid NOT IN (SELECT sid FROM evaluations)", course.code)
+                    .fetch_all(&conn)
+                    .await?.into_iter().map(|s| s.sid).collect::<Vec<_>>();
                 let pb = m.insert_before(&overall, common::progress_bar(sids.len() as u64));
                 pb.println(format!("Found {} sids for {}", sids.len(), course.code));
-                let success = save_evals(&mut conn, &course, sids, &pb).await?;
+                let success = save_evals(&conn, &course, sids, &pb).await?;
                 if !success {
                     reauth().await?;
                 }
@@ -160,42 +150,43 @@ async fn main() -> Result<()> {
                 course: Some(course),
             },
         } => {
-            let course = schema::courses::table
-                .filter(schema::courses::code.eq(course.replace(" ", "|")))
-                .get_result::<Course>(&mut conn)?;
-            let sids = SectionId::belonging_to(&course)
-                .filter(
-                    schema::sids::sid
-                        .ne_all(schema::evaluations::table.select(schema::evaluations::sid)),
-                )
-                .select(schema::sids::sid)
-                .get_results::<i32>(&mut conn)?;
+            let course = query_as!(
+                Course,
+                "SELECT code, name, unit_id FROM courses WHERE code = $1",
+                course
+            )
+            .fetch_one(&conn)
+            .await?;
+            let sids = query!("SELECT sid, course_code FROM sids WHERE course_code = $1 AND sid NOT IN (SELECT sid FROM evaluations)", course.code).fetch_all(&conn).await?.into_iter().map(|s| s.sid).collect::<Vec<_>>();
             let pb = progress_bar(sids.len() as u64);
-            save_evals(&mut conn, &course, sids, &pb).await?;
+            save_evals(&conn, &course, sids, &pb).await?;
             pb.finish();
             println!("Done");
         }
         Commands::Evals {
             command: EvalCommands::Stats,
         } => {
-            let evals = schema::evaluations::table
-                .count()
-                .get_result::<i64>(&mut conn)?;
-            let sections = schema::sids::table
-                .filter(
-                    schema::sids::sid
-                        .ne_all(schema::evaluations::table.select(schema::evaluations::sid)),
-                )
-                .count()
-                .get_result::<i64>(&mut conn)?;
+            let evals = query!("SELECT COUNT(*) FROM evaluations")
+                .fetch_one(&conn)
+                .await?
+                .count
+                .unwrap_or(0);
+
+            let sections =
+                query!("SELECT COUNT(*) FROM sids WHERE sid NOT IN (SELECT sid FROM evaluations)")
+                    .fetch_one(&conn)
+                    .await?
+                    .count
+                    .unwrap_or(0);
+
             println!("{} evals", evals);
             println!("{} sections with no eval", sections);
         }
         Commands::Serve { host } => {
-            let app = api::app()?;
-            let host = host.unwrap_or("0.0.0.0:3000".to_string());
-            let listener = tokio::net::TcpListener::bind(&host).await?;
-            axum::serve(listener, app.into_make_service()).await?;
+            // let app = api::app()?;
+            // let host = host.unwrap_or("0.0.0.0:3000".to_string());
+            // let listener = tokio::net::TcpListener::bind(&host).await?;
+            // axum::serve(listener, app.into_make_service()).await?;
         }
     }
 

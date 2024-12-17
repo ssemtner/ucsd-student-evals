@@ -1,17 +1,16 @@
 use crate::common;
 use crate::database::{Course, SectionId};
-use crate::schema::{courses, sids};
 use anyhow::{anyhow, Result};
-use diesel::{insert_or_ignore_into, QueryDsl, RunQueryDsl, SelectableHelper, SqliteConnection};
 use futures::{stream, StreamExt};
 use regex::Regex;
 use reqwest::Client;
+use sqlx::{query, query_as, Pool, Postgres};
 use tokio::time::Instant;
 
-pub async fn save_all_sids(conn: &mut SqliteConnection) -> Result<()> {
-    let courses = courses::table
-        .select(Course::as_select())
-        .get_results(conn)?;
+pub async fn save_all_sids(conn: &Pool<Postgres>) -> Result<()> {
+    let courses = query_as!(Course, "SELECT code, name, unit_id FROM courses")
+        .fetch_all(conn)
+        .await?;
 
     let client = common::client()?;
 
@@ -87,17 +86,31 @@ pub async fn save_all_sids(conn: &mut SqliteConnection) -> Result<()> {
         println!("Now at {} SIDs", sids.len());
     }
 
-    let count = insert_or_ignore_into(sids::table)
-        .values(
-            sids.into_iter()
-                .map(|(course, sid)| SectionId {
-                    sid,
-                    course_code: course.code.clone(),
-                })
-                .collect::<Vec<_>>(),
-        )
-        .execute(conn)?;
-    println!("{count} SIDs saved");
+    let values = sids
+        .clone()
+        .into_iter()
+        .map(|(course, sid)| SectionId {
+            sid,
+            course_code: course.code.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let saved = query!(
+        "
+            INSERT INTO sids (sid, course_code)
+            SELECT * FROM UNNEST($1::int[], $2::text[])
+        ",
+        &values.iter().map(|s| s.sid).collect::<Vec<_>>()[..],
+        &values
+            .into_iter()
+            .map(|s| s.course_code)
+            .collect::<Vec<_>>()[..]
+    )
+    .execute(conn)
+    .await?
+    .rows_affected();
+
+    println!("{saved} SIDs saved");
 
     Ok(())
 }
