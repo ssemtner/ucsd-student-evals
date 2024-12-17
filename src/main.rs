@@ -1,4 +1,4 @@
-// mod api;
+mod api;
 mod common;
 mod cookies;
 mod courses;
@@ -183,10 +183,10 @@ async fn main() -> Result<()> {
             println!("{} sections with no eval", sections);
         }
         Commands::Serve { host } => {
-            // let app = api::app()?;
-            // let host = host.unwrap_or("0.0.0.0:3000".to_string());
-            // let listener = tokio::net::TcpListener::bind(&host).await?;
-            // axum::serve(listener, app.into_make_service()).await?;
+            let app = api::app(conn)?;
+            let host = host.unwrap_or("0.0.0.0:3000".to_string());
+            let listener = tokio::net::TcpListener::bind(&host).await?;
+            axum::serve(listener, app.into_make_service()).await?;
         }
     }
 

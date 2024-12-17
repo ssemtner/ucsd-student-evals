@@ -1,20 +1,15 @@
 mod courses;
 mod evaluations;
 
-use crate::settings;
 use anyhow::Result;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::Router;
-use deadpool_diesel::postgres::{Manager, Pool};
-use deadpool_diesel::Runtime;
+use sqlx::{Pool, Postgres};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
-pub fn app() -> Result<Router> {
-    let manager = Manager::new(&settings().database_url, Runtime::Tokio1);
-    let pool = Pool::builder(manager).build()?;
-
+pub fn app(pool: Pool<Postgres>) -> Result<Router> {
     let router = Router::new()
         .route("/v1", get(root))
         .nest("/v1/courses", courses::get_router())

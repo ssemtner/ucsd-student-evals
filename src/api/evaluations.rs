@@ -1,24 +1,15 @@
 use crate::api::internal_error;
 use crate::database::Instructor;
-use crate::schema::terms;
-use crate::schema::{evaluations, instructors};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use deadpool_diesel::postgres::Pool;
-use diesel::dsl::{avg, case_when, count_star, sql};
-use diesel::expression::SqlLiteral;
-use diesel::sql_types::{BigInt, Double, Text};
-use diesel::{
-    define_sql_function, Column, CombineDsl, ExpressionMethods, QueryDsl, Queryable, RunQueryDsl,
-    SelectableHelper, TextExpressionMethods,
-};
 use serde::{Serialize, Serializer};
 use serde_json::json;
+use sqlx::{query, query_as, Pool, Postgres};
 use std::collections::HashMap;
 
-pub fn get_router() -> Router<Pool> {
+pub fn get_router() -> Router<Pool<Postgres>> {
     Router::new()
         .route("/sid/:sid", get(eval_summary))
         .route("/:code", get(summary))
@@ -28,45 +19,42 @@ pub fn get_router() -> Router<Pool> {
 
 async fn instructors(
     Path(code): Path<String>,
-    State(pool): State<Pool>,
+    State(pool): State<Pool<Postgres>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let conn = pool.get().await.map_err(internal_error)?;
-    let res = conn
-        .interact(|conn| {
-            instructors::table
-                .inner_join(evaluations::table)
-                .filter(evaluations::course_code.like(code))
-                .select(Instructor::as_select())
-                .distinct()
-                .get_results::<Instructor>(conn)
-        })
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
-
+    let res = query_as!(
+        Instructor,
+        "
+            SELECT DISTINCT id, name FROM instructors
+            INNER JOIN evaluations ON evaluations.instructor_id = instructors.id
+            WHERE evaluations.course_code ILIKE $1
+        ",
+        code
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(internal_error)?;
     Ok(Json(json!(res)))
 }
 
 async fn list_evals(
     Path(code): Path<String>,
-    State(pool): State<Pool>,
+    State(pool): State<Pool<Postgres>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let conn = pool.get().await.map_err(internal_error)?;
-    let res = conn
-        .interact(|conn| {
-            evaluations::table
-                .select(evaluations::sid)
-                .filter(evaluations::course_code.like(code))
-                .get_results::<i32>(conn)
-        })
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    let res = query!(
+        "SELECT sid FROM evaluations WHERE course_code ILIKE $1",
+        code
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(internal_error)?
+    .into_iter()
+    .map(|row| row.sid)
+    .collect::<Vec<_>>();
 
     Ok(Json(json!(res)))
 }
 
-#[derive(Queryable, Serialize)]
+#[derive(Serialize, Debug)]
 struct Summary {
     sections: i64,
     #[serde(rename = "actualGPA", serialize_with = "float_as_str")]
@@ -87,114 +75,99 @@ where
 
 async fn summary(
     Path(code): Path<String>,
-    State(pool): State<Pool>,
+    State(pool): State<Pool<Postgres>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let conn = pool.get().await.map_err(internal_error)?;
+    let res = query!(
+        "
+            WITH stats AS (
+                SELECT
+                    instructors.id,
+                    instructors.name,
+                    (
+                        SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8
+                        FROM UNNEST(actual_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)
+                    ) AS actual_gpa,
+                    (
+                        SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8
+                        FROM UNNEST(expected_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)
+                    ) AS expected_gpa,
+                    (
+                        SELECT (SUM(n * w) / SUM(n))::float8
+                        FROM UNNEST(hours, CASE
+                            WHEN CARDINALITY(hours) = 4 THEN array[0.0, 5.0, 10.0, 15.0]
+                            ELSE array[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0, 21.0]
+                        END)
+                        WITH ORDINALITY AS arr(n, w, i)
+                    ) AS hours
+                FROM evaluations
+                INNER JOIN instructors ON evaluations.instructor_id = instructors.id
+                WHERE course_code = $1
+            )
 
-    let res = conn
-        .interact(move |conn| {
-            let q = evaluations::table
-                .filter(evaluations::course_code.like(code))
-                .inner_join(terms::table);
-            let actual_gpa_select = avg(extract_mean(evaluations::actual_grades, 5, |i| 4 - i));
-            let expected_gpa_select = avg(extract_mean(evaluations::expected_grades, 5, |i| 4 - i));
-            let hours_select = avg(case_when(
-                json_array_length(evaluations::hours).eq(4),
-                extract_mean(evaluations::hours, 4, |i| i * 5),
-            )
-            .otherwise(extract_mean(evaluations::hours, 11, |i| i * 2 + 1)));
-            q.clone()
-                .inner_join(instructors::table)
-                .group_by(instructors::id)
-                .select((
-                    instructors::name,
-                    actual_gpa_select.clone(),
-                    expected_gpa_select.clone(),
-                    hours_select.clone(),
-                    count_star(),
-                ))
-                .union_all(q.select((
-                    sql::<Text>("'overall'"),
-                    actual_gpa_select,
-                    expected_gpa_select,
-                    hours_select,
-                    count_star(),
-                )))
-                .get_results::<(String, Option<f64>, Option<f64>, Option<f64>, i64)>(conn)
-        })
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
-    let res: HashMap<String, Summary> = res
+            SELECT
+                name as \"instructor!\",
+                COUNT(*) AS \"sections!: i64\",
+                COALESCE(AVG(actual_gpa), -1.0) AS \"actual_gpa!: f64\",
+                COALESCE(AVG(expected_gpa), -1.0) AS \"expected_gpa!: f64\",
+                COALESCE(AVG(hours), -1.0) AS \"hours!: f64\"
+            FROM stats
+            GROUP BY id, name
+
+            UNION ALL
+
+            SELECT
+                'overall' as \"instructor!\",
+                COUNT(*) AS \"sections!: i64\",
+                COALESCE(AVG(actual_gpa), -1.0) AS \"actual_gpa!: f64\",
+                COALESCE(AVG(expected_gpa), -1.0) AS \"expected_gpa!: f64\",
+                COALESCE(AVG(hours), -1.0) AS \"hours!: f64\"
+            FROM stats
+        ",
+        code
+    ).fetch_all(&pool).await.map_err(internal_error)?
         .into_iter()
-        .filter_map(|(a, b, c, d, e)| b.zip(c).zip(d).map(|((b, c), d)| (a, b, c, d, e)))
-        .map(|(instructor, actual_gpa, expected_gpa, hours, count)| {
-            (
-                instructor,
-                Summary {
-                    actual_gpa,
-                    expected_gpa,
-                    hours,
-                    sections: count,
-                },
-            )
+        .map(|row| {
+            (row.instructor, Summary {
+                sections: row.sections,
+                actual_gpa: row.actual_gpa,
+                expected_gpa: row.expected_gpa,
+                hours: row.hours,
+            })
         })
-        .collect();
+        .collect::<HashMap<_, _>>();
+
     Ok(Json(json!(res)))
 }
 
 async fn eval_summary(
     Path(sid): Path<i32>,
-    State(pool): State<Pool>,
+    State(pool): State<Pool<Postgres>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let conn = pool.get().await.map_err(internal_error)?;
+    let res = query_as!(Summary,
+        "
+            SELECT
+                1 AS \"sections!: i64\",
+                COALESCE((
+                    SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8
+                    FROM UNNEST(actual_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)
+                ), -1.0) AS \"actual_gpa!: f64\",
+                COALESCE((
+                    SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8
+                    FROM UNNEST(expected_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)
+                ), -1.0) AS \"expected_gpa!: f64\",
+                COALESCE((
+                    SELECT (SUM(n * w) / SUM(n))::float8
+                    FROM UNNEST(hours, CASE
+                        WHEN CARDINALITY(hours) = 4 THEN array[0.0, 5.0, 10.0, 15.0]
+                        ELSE array[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0, 21.0]
+                    END)
+                    WITH ORDINALITY AS arr(n, w, i)
+                ), -1.0) AS \"hours!: f64\"
+            FROM evaluations
+            WHERE sid = $1
+        ",
+        sid
+    ).fetch_one(&pool).await.map_err(internal_error)?;
 
-    let res = conn
-        .interact(move |conn| {
-            evaluations::table
-                .filter(evaluations::sid.eq(sid))
-                .inner_join(terms::table)
-                .select((
-                    sql::<BigInt>("1"),
-                    extract_mean(evaluations::actual_grades, 5, |i| 4 - i),
-                    extract_mean(evaluations::expected_grades, 5, |i| 4 - i),
-                    case_when(
-                        json_array_length(evaluations::hours).eq(4),
-                        extract_mean(evaluations::hours, 4, |i| i * 5),
-                    )
-                    .otherwise(extract_mean(evaluations::hours, 11, |i| i * 2 + 1)),
-                ))
-                .get_result::<Summary>(conn)
-        })
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
     Ok(Json(json!(res)))
-}
-
-fn column_name<T>(_: T) -> &'static str
-where
-    T: Column,
-{
-    T::NAME
-}
-
-define_sql_function! {
-    fn json_array_length(a: Text) -> Integer
-}
-
-fn extract_mean<Col>(column: Col, size: u32, weight: fn(u32) -> u32) -> SqlLiteral<Double>
-where
-    Col: Column,
-{
-    let col = column_name(column);
-    let numerator = (0..size)
-        .map(|i| format!("json_extract({col}, '$[{i}]') * {}.0", weight(i)))
-        .collect::<Vec<_>>()
-        .join("+");
-    let denominator = (0..size)
-        .map(|i| format!("json_extract({col}, '$[{i}]')"))
-        .collect::<Vec<_>>()
-        .join("+");
-    sql(&format!("({}) / ({})", numerator, denominator))
 }
