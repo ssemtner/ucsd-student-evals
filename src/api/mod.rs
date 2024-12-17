@@ -1,22 +1,24 @@
 mod courses;
 mod evaluations;
 
-use crate::settings;
 use anyhow::Result;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::Router;
-use deadpool_diesel::sqlite::{Manager, Pool};
-use deadpool_diesel::Runtime;
+use sqlx::{Pool, Postgres};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
-pub fn app() -> Result<Router> {
-    let manager = Manager::new(&settings().database_url, Runtime::Tokio1);
-    let pool = Pool::builder(manager).build()?;
-
+pub fn app(pool: Pool<Postgres>) -> Result<Router> {
     let router = Router::new()
         .route("/v1", get(root))
         .nest("/v1/courses", courses::get_router())
         .nest("/v1/evals", evaluations::get_router())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
         .with_state(pool);
 
     Ok(router)

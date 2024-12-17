@@ -1,26 +1,24 @@
 use crate::api::internal_error;
-use crate::schema::{courses, units};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use deadpool_diesel::sqlite::Pool;
-use diesel::{QueryDsl, Queryable, RunQueryDsl, TextExpressionMethods};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::{query_as, Pool, Postgres};
 
-pub fn get_router() -> Router<Pool> {
+pub fn get_router() -> Router<Pool<Postgres>> {
     Router::new().route("/", get(search))
 }
 
 #[derive(Deserialize)]
 struct SearchQuery {
-    page: Option<usize>,
-    per_page: Option<usize>,
+    page: Option<i32>,
+    per_page: Option<i32>,
     q: Option<String>,
 }
 
-#[derive(Queryable, Serialize)]
+#[derive(Serialize)]
 struct SearchResult {
     code: String,
     name: String,
@@ -28,28 +26,28 @@ struct SearchResult {
 }
 
 async fn search(
-    State(pool): State<Pool>,
+    State(pool): State<Pool<Postgres>>,
     args: Query<SearchQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let conn = pool.get().await.map_err(internal_error)?;
     let per_page = args.per_page.unwrap_or(20).min(100);
-    let res = conn
-        .interact(move |conn| {
-            let like = format!("%{}%", args.q.clone().unwrap_or_default());
-            courses::table
-                .inner_join(units::table)
-                .select((courses::code, courses::name, units::name))
-                .filter(courses::name.like(&like))
-                .offset(
-                    args.page
-                        .map(|page| (page.max(1) - 1) * per_page)
-                        .unwrap_or_default() as i64,
-                )
-                .limit(per_page as i64)
-                .get_results::<SearchResult>(conn)
-        })
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    let like = format!("%{}%", args.q.clone().unwrap_or_default());
+    let res = query_as!(
+        SearchResult,
+        "
+                SELECT courses.code, courses.name, units.name as unit FROM courses
+                INNER JOIN units ON courses.unit_id = units.id
+                WHERE courses.name ILIKE $1
+                OFFSET $2 LIMIT $3
+        ",
+        like,
+        args.page
+            .map(|page| (page.max(1) - 1) * per_page)
+            .unwrap_or_default() as i32,
+        per_page as i32,
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(internal_error)?;
+
     Ok(Json(json!(res)))
 }
