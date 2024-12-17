@@ -1,0 +1,83 @@
+version: "3.4"
+
+services:
+  traefik:
+    image: traefik:v3.2
+    command:
+      # - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.dbsecure.address=:5432"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=scottsemtner@gmail.com"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+    ports:
+      - mode: host
+        protocol: tcp
+        published: 80
+        target: 80
+      - mode: host
+        protocol: tcp
+        published: 443
+        target: 443
+      - mode: host
+        protocol: tcp
+        published: 5432
+        target: 5432
+    volumes:
+      - letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+  evals:
+    image: ghcr.io/ssemtner/ucsd-student-evals:latest
+    stop_grace_period: 1s
+    secrets:
+      - service-url
+      - db-password
+      - cookies-token
+    entrypoint: "/bin/sh -c 'export SERVICE_URL=$$(cat /run/secrets/service-url) && export DATABASE_URL=postgres://postgres:$$(cat /run/secrets/db-password)@postgres/evals && export && export COOKIES_TOKEN=$$(cat /run/secrets/cookies-token) && /app/ucsd-student-evals serve' && /app/ucsd-student-evals serve"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.evals.loadbalancer.server.port=3000"
+      - "traefik.http.routers.evals.rule=Host(`vps.scottsemtner.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.evals.entrypoints=websecure"
+      - "traefik.http.routers.evals.tls=true"
+      - "traefik.http.routers.evals.tls.certresolver=myresolver"
+      - "traefik.http.middlewares.evals-stripprefix.stripprefix.prefixes=/api"
+      - "traefik.http.routers.evals.middlewares=evals-stripprefix"
+
+  postgres:
+    image: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/db-password
+      POSTGRES_DB: evals
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    secrets:
+      - db-password
+    labels:
+      - "traefik.enable=true"
+      - "traefik.tcp.services.postgres.loadbalancer.server.port=5432"
+      - "traefik.tcp.routers.postgres.rule=HostSNI(`vps.scottsemtner.com`)"
+      - "traefik.tcp.routers.postgres.entrypoints=dbsecure"
+      - "traefik.tcp.routers.postgres.tls=true"
+      - "traefik.tcp.routers.postgres.tls.certresolver=myresolver"
+
+volumes:
+  pg-data:
+  letsencrypt:
+
+secrets:
+  db-password:
+    external: true
+  service-url:
+    external: true
+  proxy-password:
+    external: true
+  cookies-token:
+    external: true

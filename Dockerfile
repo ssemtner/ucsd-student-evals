@@ -19,7 +19,7 @@ RUN mkdir src && \
 
 COPY src ./src
 COPY .sqlx ./.sqlx
-RUN cargo build --release --bin ucsd-student-evals
+RUN touch ./src/main.rs && cargo build --release --bin ucsd-student-evals
 
 FROM alpine:3.21 AS runtime
 WORKDIR /app
