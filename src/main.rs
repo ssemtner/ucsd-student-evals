@@ -29,9 +29,9 @@ pub(crate) fn settings() -> &'static Settings {
 
 #[derive(Deserialize, Debug)]
 struct Settings {
-    proxy_url: String,
-    proxy_username: String,
-    proxy_password: String,
+    service_url: String,
+    proxy_username: Option<String>,
+    proxy_password: Option<String>,
     cookies_token: String,
     database_url: String,
 }
@@ -89,7 +89,8 @@ async fn reauth() -> Result<()> {
 async fn main() -> Result<()> {
     {
         let settings = Config::builder()
-            .add_source(config::File::with_name("config.toml"))
+            .add_source(config::Environment::default().separator(""))
+            .add_source(config::File::with_name("config.toml").required(false))
             .build()?;
         SETTINGS.set(settings.try_deserialize::<Settings>()?)?;
     }

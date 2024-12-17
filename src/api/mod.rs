@@ -1,8 +1,11 @@
+mod auth;
 mod courses;
 mod evaluations;
 
 use anyhow::Result;
+use auth::authorization_middleware;
 use axum::http::StatusCode;
+use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use axum::Router;
 use sqlx::{Pool, Postgres};
@@ -11,9 +14,10 @@ use tracing::Level;
 
 pub fn app(pool: Pool<Postgres>) -> Result<Router> {
     let router = Router::new()
-        .route("/v1", get(root))
         .nest("/v1/courses", courses::get_router())
         .nest("/v1/evals", evaluations::get_router())
+        .route_layer(from_fn_with_state(pool.clone(), authorization_middleware))
+        .route("/v1", get(root))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))

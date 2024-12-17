@@ -18,7 +18,7 @@ struct CookiesResponse {
 pub async fn fetch_cookies(token: &str) -> Result<()> {
     let client = reqwest::Client::new();
     let res = client
-        .post(format!("{}:3000/cookies", settings().proxy_url))
+        .post(format!("{}:3000/cookies", settings().service_url))
         .header("Authorization", token);
     let res = res.send().await?;
     let json = res.json::<Vec<CookiesResponse>>().await?;
