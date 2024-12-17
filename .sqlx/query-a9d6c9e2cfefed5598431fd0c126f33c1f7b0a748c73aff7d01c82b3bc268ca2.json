@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO units (id, name)\n            SELECT * FROM UNNEST($1::int[], $2::text[])\n            ON CONFLICT (id) DO UPDATE\n            SET name = EXCLUDED.name\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4Array",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a9d6c9e2cfefed5598431fd0c126f33c1f7b0a748c73aff7d01c82b3bc268ca2"
+}

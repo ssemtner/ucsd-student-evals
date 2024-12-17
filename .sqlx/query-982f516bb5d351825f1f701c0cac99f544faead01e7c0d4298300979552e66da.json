@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO terms (name)\n            VALUES ($1)\n            ON CONFLICT (name) DO UPDATE\n            SET name = terms.name\n            RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "982f516bb5d351825f1f701c0cac99f544faead01e7c0d4298300979552e66da"
+}

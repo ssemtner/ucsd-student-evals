@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT courses.code, courses.name, units.name as unit FROM courses\n                INNER JOIN units ON courses.unit_id = units.id\n                WHERE courses.name ILIKE $1\n                OFFSET $2 LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "code",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "unit",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a2ea49dcbb85b377b80d032b6d4d60359b0c5996a5ef0d343bcd9a7507ea6bf0"
+}

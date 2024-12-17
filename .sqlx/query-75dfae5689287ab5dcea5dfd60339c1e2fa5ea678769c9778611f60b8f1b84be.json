@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                1 AS \"sections!: i64\",\n                COALESCE((\n                    SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8\n                    FROM UNNEST(actual_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)\n                ), -1.0) AS \"actual_gpa!: f64\",\n                COALESCE((\n                    SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8\n                    FROM UNNEST(expected_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)\n                ), -1.0) AS \"expected_gpa!: f64\",\n                COALESCE((\n                    SELECT (SUM(n * w) / SUM(n))::float8\n                    FROM UNNEST(hours, CASE\n                        WHEN CARDINALITY(hours) = 4 THEN array[0.0, 5.0, 10.0, 15.0]\n                        ELSE array[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0, 21.0]\n                    END)\n                    WITH ORDINALITY AS arr(n, w, i)\n                ), -1.0) AS \"hours!: f64\"\n            FROM evaluations\n            WHERE sid = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sections!: i64",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "actual_gpa!: f64",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "expected_gpa!: f64",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "hours!: f64",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "75dfae5689287ab5dcea5dfd60339c1e2fa5ea678769c9778611f60b8f1b84be"
+}

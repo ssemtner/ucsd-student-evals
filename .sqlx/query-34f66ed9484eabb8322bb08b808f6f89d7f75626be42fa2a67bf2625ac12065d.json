@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sid, course_code FROM sids WHERE course_code = $1 AND sid NOT IN (SELECT sid FROM evaluations)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sid",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "course_code",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "34f66ed9484eabb8322bb08b808f6f89d7f75626be42fa2a67bf2625ac12065d"
+}

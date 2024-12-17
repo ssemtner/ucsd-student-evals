@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT DISTINCT id, name FROM instructors\n            INNER JOIN evaluations ON evaluations.instructor_id = instructors.id\n            WHERE evaluations.course_code ILIKE $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "41901e1eef3e9950594df873497c88a25aaf1e89530d250b6e8307fd963c003a"
+}
