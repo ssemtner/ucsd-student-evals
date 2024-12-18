@@ -31,13 +31,16 @@ async fn search(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let per_page = args.per_page.unwrap_or(20).min(100);
     let like = format!("%{}%", args.q.clone().unwrap_or_default());
-    let res = query_as!(
-        SearchResult,
+    let res = query_as!(SearchResult,
         "
-                SELECT courses.code, courses.name, units.name as unit FROM courses
-                INNER JOIN units ON courses.unit_id = units.id
-                WHERE courses.name ILIKE $1
-                OFFSET $2 LIMIT $3
+            SELECT courses.code, courses.name, units.name as unit FROM courses
+            INNER JOIN units ON courses.unit_id = units.id
+            WHERE courses.name ILIKE $1
+            ORDER BY
+                SPLIT_PART(courses.name, ' ', 1),
+                CAST(REGEXP_REPLACE(SPLIT_PART(courses.name, ' ', 2), '[A-Za-z]+$', '') AS INTEGER),
+                NULLIF(REGEXP_REPLACE(SPLIT_PART(courses.name, ' ', 2), '^[0-9]+', ''), '') NULLS FIRST
+            OFFSET $2 LIMIT $3
         ",
         like,
         args.page
