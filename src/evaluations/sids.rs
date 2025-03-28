@@ -99,6 +99,7 @@ pub async fn save_all_sids(conn: &Pool<Postgres>) -> Result<()> {
         "
             INSERT INTO sids (sid, course_code)
             SELECT * FROM UNNEST($1::int[], $2::text[])
+            ON CONFLICT DO NOTHING
         ",
         &values.iter().map(|s| s.sid).collect::<Vec<_>>()[..],
         &values
