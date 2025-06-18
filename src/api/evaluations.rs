@@ -84,15 +84,15 @@ async fn summary(
                     instructors.id,
                     instructors.name,
                     (
-                        SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8
+                        SELECT (SUM(n * w) / NULLIF(SUM(CASE WHEN i <= 5 THEN n ELSE 0 END), 0))::float8
                         FROM UNNEST(actual_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)
                     ) AS actual_gpa,
                     (
-                        SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8
+                        SELECT (SUM(n * w) / NULLIF(SUM(CASE WHEN i <= 5 THEN n ELSE 0 END), 0))::float8
                         FROM UNNEST(expected_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)
                     ) AS expected_gpa,
                     (
-                        SELECT (SUM(n * w) / SUM(n))::float8
+                        SELECT (SUM(n * w) / NULLIF(SUM(n), 0))::float8
                         FROM UNNEST(hours, CASE
                             WHEN CARDINALITY(hours) = 4 THEN array[0.0, 5.0, 10.0, 15.0]
                             ELSE array[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0, 21.0]
@@ -148,15 +148,15 @@ async fn eval_summary(
             SELECT
                 1 AS \"sections!: i64\",
                 COALESCE((
-                    SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8
+                    SELECT (SUM(n * w) / NULLIF(SUM(CASE WHEN i <= 5 THEN n ELSE 0 END), 0))::float8
                     FROM UNNEST(actual_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)
                 ), -1.0) AS \"actual_gpa!: f64\",
                 COALESCE((
-                    SELECT (SUM(n * w) / SUM(CASE WHEN i <= 5 THEN n ELSE 0 END))::float8
+                    SELECT (SUM(n * w) / NULLIF(SUM(CASE WHEN i <= 5 THEN n ELSE 0 END), 0))::float8
                     FROM UNNEST(expected_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)
                 ), -1.0) AS \"expected_gpa!: f64\",
                 COALESCE((
-                    SELECT (SUM(n * w) / SUM(n))::float8
+                    SELECT (SUM(n * w) / NULLIF(SUM(n), 0))::float8
                     FROM UNNEST(hours, CASE
                         WHEN CARDINALITY(hours) = 4 THEN array[0.0, 5.0, 10.0, 15.0]
                         ELSE array[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0, 21.0]
