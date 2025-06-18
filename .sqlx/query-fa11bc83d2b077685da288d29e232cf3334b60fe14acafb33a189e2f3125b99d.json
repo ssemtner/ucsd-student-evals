@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH stats AS (\n                SELECT\n                    instructors.id,\n                    instructors.name,\n                    (\n                        SELECT (SUM(n * w) / NULLIF(SUM(CASE WHEN i <= 5 THEN n ELSE 0 END), 0))::float8\n                        FROM UNNEST(actual_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)\n                    ) AS actual_gpa,\n                    (\n                        SELECT (SUM(n * w) / NULLIF(SUM(CASE WHEN i <= 5 THEN n ELSE 0 END), 0))::float8\n                        FROM UNNEST(expected_grades, array[4.0, 3.0, 2.0, 1.0]) WITH ORDINALITY AS arr(n, w, i)\n                    ) AS expected_gpa,\n                    (\n                        SELECT (SUM(n * w) / NULLIF(SUM(n), 0))::float8\n                        FROM UNNEST(hours, CASE\n                            WHEN CARDINALITY(hours) = 4 THEN array[0.0, 5.0, 10.0, 15.0]\n                            ELSE array[1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0, 21.0]\n                        END)\n                        WITH ORDINALITY AS arr(n, w, i)\n                    ) AS hours\n                FROM evaluations\n                INNER JOIN instructors ON evaluations.instructor_id = instructors.id\n                WHERE course_code = $1\n            )\n\n            SELECT\n                name as \"instructor!\",\n                COUNT(*) AS \"sections!: i64\",\n                COALESCE(AVG(actual_gpa), -1.0) AS \"actual_gpa!: f64\",\n                COALESCE(AVG(expected_gpa), -1.0) AS \"expected_gpa!: f64\",\n                COALESCE(AVG(hours), -1.0) AS \"hours!: f64\"\n            FROM stats\n            GROUP BY id, name\n\n            UNION ALL\n\n            SELECT\n                'overall' as \"instructor!\",\n                COUNT(*) AS \"sections!: i64\",\n                COALESCE(AVG(actual_gpa), -1.0) AS \"actual_gpa!: f64\",\n                COALESCE(AVG(expected_gpa), -1.0) AS \"expected_gpa!: f64\",\n                COALESCE(AVG(hours), -1.0) AS \"hours!: f64\"\n            FROM stats\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "instructor!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "sections!: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "actual_gpa!: f64",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "expected_gpa!: f64",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "hours!: f64",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "fa11bc83d2b077685da288d29e232cf3334b60fe14acafb33a189e2f3125b99d"
+}
