@@ -1,38 +1,22 @@
 version: "3.4"
 
 services:
-  traefik:
-    image: traefik:v3.2
-    command:
-      # - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.dbsecure.address=:5432"
-      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.myresolver.acme.email=scottsemtner@gmail.com"
-      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
-    ports:
-      - mode: host
-        protocol: tcp
-        published: 80
-        target: 80
-      - mode: host
-        protocol: tcp
-        published: 443
-        target: 443
-      - mode: host
-        protocol: tcp
-        published: 5432
-        target: 5432
-    volumes:
-      - letsencrypt:/letsencrypt
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+  cookieprovider:
+    image: cookieprovider:latest
+    networks:
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.cookieprovider.loadbalancer.server.port=3000"
+      - "traefik.http.routers.cookieprovider.rule=Host(`vps.scottsemtner.com`) && PathPrefix(`/cookies`)"
+      - "traefik.http.routers.cookieprovider.entrypoints=websecure"
+      - "traefik.http.routers.cookieprovider.tls=true"
+      - "traefik.http.routers.cookieprovider.tls.certresolver=myresolver"
+
   evals:
     image: ghcr.io/ssemtner/ucsd-student-evals:latest
+    networks:
+      - traefik-public
     stop_grace_period: 1s
     secrets:
       - service-url
@@ -51,7 +35,9 @@ services:
       - "traefik.http.routers.evals.middlewares=evals-stripprefix"
 
   postgres:
-    image: postgres
+    image: postgres:17
+    networks:
+      - traefik-public # FIXME:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/db-password
@@ -60,17 +46,25 @@ services:
       - pg-data:/var/lib/postgresql/data
     secrets:
       - db-password
+
+  duo-client:
+    image: duo-adb:latest
+    networks:
+      - traefik-public
+    environment:
+      DUO_AUTH_TOKEN_FILE: /run/secrets/duo-token
+      ADB_HOST: adb-proxy
+      ADB_PORT: 5555
     labels:
       - "traefik.enable=true"
-      - "traefik.tcp.services.postgres.loadbalancer.server.port=5432"
-      - "traefik.tcp.routers.postgres.rule=HostSNI(`vps.scottsemtner.com`)"
-      - "traefik.tcp.routers.postgres.entrypoints=dbsecure"
-      - "traefik.tcp.routers.postgres.tls=true"
-      - "traefik.tcp.routers.postgres.tls.certresolver=myresolver"
+      - "traefik.http.services.duo-client.loadbalancer.server.port=8000"
+      - "traefik.http.routers.duo-client.rule=Host(`duo.cmov.dev`)"
+      - "traefik.http.routers.duo-client.entrypoints=websecure"
+      - "traefik.http.routers.duo-client.tls=true"
+      - "traefik.http.routers.duo-client.tls.certresolver=myresolver"
 
 volumes:
   pg-data:
-  letsencrypt:
 
 secrets:
   db-password:
@@ -80,4 +74,10 @@ secrets:
   proxy-password:
     external: true
   cookies-token:
+    external: true
+  duo-token:
+    external: true
+
+networks:
+  traefik-public:
     external: true
