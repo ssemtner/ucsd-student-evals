@@ -37,7 +37,7 @@ services:
   postgres:
     image: postgres:17
     networks:
-      - traefik-public # FIXME:
+      - traefik-public
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/db-password
@@ -46,6 +46,14 @@ services:
       - pg-data:/var/lib/postgresql/data
     secrets:
       - db-password
+    labels:
+      - "traefik.enable=true"
+      - "traefik.tcp.services.postgres.loadbalancer.server.port=5432"
+      - "traefik.tcp.routers.postgres.rule=HostSNI(`vps.scottsemtner.com`)"
+      - "traefik.tcp.routers.postgres.entrypoints=dbsecure"
+      - "traefik.tcp.routers.postgres.tls=true"
+      - "traefik.tcp.routers.postgres.tls.certresolver=myresolver"
+      - "traefik.tcp.routers.postgres.tls.options=postgres-tls@file"
 
   duo-client:
     image: duo-adb:latest
@@ -55,6 +63,8 @@ services:
       DUO_AUTH_TOKEN_FILE: /run/secrets/duo-token
       ADB_HOST: adb-proxy
       ADB_PORT: 5555
+    secrets:
+      - duo-token
     labels:
       - "traefik.enable=true"
       - "traefik.http.services.duo-client.loadbalancer.server.port=8000"
